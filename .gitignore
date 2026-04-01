@@ -1,0 +1,105 @@
+######################################################################
+# UniApp
+
+# UniApp 编译输出目录
+unpackage/
+
+# HBuilderX 编辑器
+.hbuilderx/
+
+# 小程序相关
+.mp-weixin/
+.mp-alipay/
+.mp-baidu/
+.mp-toutiao/
+.mp-qq/
+.mp-kuaishou/
+.mp-lark/
+.mp-jd/
+.mp-xhs/
+
+######################################################################
+# Node.js / 前端构建
+
+node_modules/
+dist/
+.temp/
+.cache/
+
+# 包管理器
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# 环境变量文件
+.env
+.env.local
+.env.*.local
+.env.development.local
+.env.production.local
+.env.staging.local
+
+######################################################################
+# IDE
+
+### HBuilderX ###
+.hbuilderx/
+
+### Visual Studio Code ###
+.vscode/
+
+### IntelliJ IDEA ###
+.idea
+*.iws
+*.iml
+*.ipr
+
+### WebStorm ###
+.idea/
+
+### STS ###
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+
+### JRebel ###
+rebel.xml
+
+### NetBeans ###
+nbproject/private/
+nbbuild/
+nbdist/
+.nb-gradle/
+
+######################################################################
+# OS generated files
+
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+
+######################################################################
+# Others
+
+*.log
+*.log.gz
+*.xml.versionsBackup
+*.swp
+*.swo
+*~
+
+# Java / Maven / Gradle
+.gradle
+/build/
+!gradle/wrapper/gradle-wrapper.jar
+target/
+!.mvn/wrapper/maven-wrapper.jar
+.flattened-pom.xml

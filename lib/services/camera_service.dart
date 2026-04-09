@@ -38,13 +38,10 @@ class CameraService {
   /// 拍照，返回图片数据
   ///
   /// 用户取消操作时返回 null。
-  /// 图片最大宽度 1920 像素，最大高度 1920 像素，质量 85%。
+  /// 不设置 maxWidth/maxHeight/imageQuality，保留原图质量。
   Future<CameraResult?> takePhoto() async {
     final XFile? photo = await _picker.pickImage(
       source: ImageSource.camera,
-      maxWidth: 1920,
-      maxHeight: 1920,
-      imageQuality: 85,
     );
     if (photo == null) return null;
 
@@ -72,13 +69,10 @@ class CameraService {
   /// 从相册选择图片
   ///
   /// 用户取消操作时返回 null。
-  /// 图片最大宽度 1920 像素，最大高度 1920 像素，质量 85%。
+  /// 不设置 maxWidth/maxHeight/imageQuality，保留原图质量。
   Future<CameraResult?> pickFromGallery() async {
     final XFile? photo = await _picker.pickImage(
       source: ImageSource.gallery,
-      maxWidth: 1920,
-      maxHeight: 1920,
-      imageQuality: 85,
     );
     if (photo == null) return null;
 

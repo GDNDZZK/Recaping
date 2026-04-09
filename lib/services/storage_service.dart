@@ -6,6 +6,7 @@ import '../core/constants/app_constants.dart';
 import '../core/database/config_database.dart';
 import '../core/database/database_helper.dart';
 import '../core/database/session_database.dart';
+import '../core/utils/thumbnail_util.dart';
 import '../models/session.dart';
 
 /// 存储空间统计信息
@@ -213,6 +214,148 @@ class StorageService {
     return StorageStats(
       totalSessions: sessionCount,
       totalSizeBytes: totalSize,
+    );
+  }
+
+  // ==================== 清理功能 ====================
+
+  /// 清理临时文件
+  ///
+  /// 清除 temp 目录下的所有文件，返回被删除的文件数量。
+  /// Author: GDNDZZK
+  Future<int> clearTempFiles() async {
+    final tempPath = await _dbHelper.tempPath;
+    final tempDir = Directory(tempPath);
+    if (!await tempDir.exists()) return 0;
+
+    int deletedCount = 0;
+    await for (final entity in tempDir.list()) {
+      if (entity is File) {
+        try {
+          await entity.delete();
+          deletedCount++;
+        } catch (_) {
+          // 忽略删除失败的文件
+        }
+      }
+    }
+    return deletedCount;
+  }
+
+  /// 清理指定天数之前的旧会话
+  ///
+  /// [olderThanDays] 超过多少天未更新的会话将被删除，默认 90 天
+  /// 返回被删除的会话 ID 列表。
+  /// Author: GDNDZZK
+  Future<List<String>> cleanOldSessions({int olderThanDays = 90}) async {
+    final cutoff = DateTime.now().subtract(Duration(days: olderThanDays));
+    final sessions = await getAllSessions();
+    final oldSessions = sessions
+        .where((s) => s.updatedAt.isBefore(cutoff))
+        .toList();
+
+    final deletedIds = <String>[];
+    for (final session in oldSessions) {
+      await deleteSession(session.sessionId);
+      deletedIds.add(session.sessionId);
+    }
+    return deletedIds;
+  }
+
+  /// 压缩会话中的媒体文件（重新生成更小的缩略图）
+  ///
+  /// [sessionId] 会话 ID
+  /// [thumbnailMaxSize] 新缩略图的最大边长（像素），默认 100
+  /// 返回节省的空间（字节）。
+  /// Author: GDNDZZK
+  Future<int> compressSessionMedia(
+    String sessionId, {
+    int thumbnailMaxSize = 100,
+  }) async {
+    final sessionDb = await openSession(sessionId);
+    final photos = await sessionDb.getPhotos();
+    int savedBytes = 0;
+
+    for (final photo in photos) {
+      // 记录旧缩略图大小
+      final oldThumbnailSize = photo.thumbnail.length;
+
+      // 使用原图重新生成更小的缩略图
+      final newThumbnail = await ThumbnailUtil.generate(
+        photo.data,
+        maxSize: thumbnailMaxSize,
+      );
+
+      // 计算节省的空间
+      if (newThumbnail.length < oldThumbnailSize) {
+        savedBytes += oldThumbnailSize - newThumbnail.length;
+
+        // 更新数据库中的缩略图
+        final updatedPhoto = photo.copyWith(thumbnail: newThumbnail);
+        await sessionDb.deletePhoto(photo.id);
+        await sessionDb.insertPhoto(updatedPhoto);
+      }
+    }
+
+    return savedBytes;
+  }
+
+  /// 获取所有会话的详细存储统计
+  ///
+  /// 遍历每个会话数据库，统计音频、照片、视频的占用空间。
+  /// Author: GDNDZZK
+  Future<StorageStats> getDetailedStorageStats() async {
+    final sessions = await getAllSessions();
+    int totalSize = 0;
+    int audioSize = 0;
+    int photosSize = 0;
+    int videosSize = 0;
+
+    for (final session in sessions) {
+      try {
+        final sessionDb = await openSession(session.sessionId);
+
+        // 统计音频大小
+        final audioChunks = await sessionDb.getAudioChunks();
+        for (final chunk in audioChunks) {
+          audioSize += chunk.data.length;
+        }
+
+        // 统计照片大小
+        final photos = await sessionDb.getPhotos();
+        for (final photo in photos) {
+          photosSize += photo.data.length + photo.thumbnail.length;
+        }
+
+        // 统计视频大小
+        final videoChunks = await sessionDb.getVideoChunks();
+        for (final chunk in videoChunks) {
+          videosSize += chunk.data.length + (chunk.thumbnail?.length ?? 0);
+        }
+      } catch (_) {
+        // 忽略打开失败的会话
+      }
+
+      // 加上 .recp 文件本身的大小
+      try {
+        final sessionsDir = await _dbHelper.sessionsPath;
+        final file = File(
+          '$sessionsDir/${session.sessionId}${AppConstants.recpFileExtension}',
+        );
+        if (await file.exists()) {
+          totalSize += await file.length();
+        }
+      } catch (_) {
+        // 忽略文件大小获取失败
+      }
+    }
+
+    return StorageStats(
+      totalSessions: sessions.length,
+      totalSizeBytes: totalSize,
+      audioSizeBytes: audioSize,
+      photosSizeBytes: photosSize,
+      videosSizeBytes: videosSize,
     );
   }
 

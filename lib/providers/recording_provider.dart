@@ -6,6 +6,7 @@ import '../models/bookmark.dart';
 import '../models/photo.dart';
 import '../models/text_note.dart';
 import '../models/timeline_event.dart';
+import '../models/video_chunk.dart';
 import '../services/camera_service.dart';
 import '../services/recording_service.dart';
 import '../services/timeline_service.dart';
@@ -74,6 +75,15 @@ final chunkIndexProvider = StreamProvider<int>((ref) {
   return service.onTick.map((tick) => tick.chunkIndex);
 });
 
+/// 总时间轴是否暂停 Provider
+///
+/// 监听 [RecordingService.onStateChanged] 流，返回总时间轴是否暂停。
+/// Author: GDNDZZK
+final isTotalTimelinePausedProvider = Provider<bool>((ref) {
+  final stateAsync = ref.watch(recordingStateProvider);
+  return stateAsync.valueOrNull == RecordingState.totalPaused;
+});
+
 /// 时间轴事件列表 Notifier
 ///
 /// 管理当前录音会话的时间轴事件列表，提供添加/删除/刷新操作。
@@ -117,6 +127,13 @@ class TimelineEventsNotifier extends StateNotifier<List<TimelineEvent>> {
   ///
   /// 通过 [TimelineService] 添加书签后自动刷新事件列表。
   Future<void> addBookmark(Bookmark bookmark) async {
+    await refresh();
+  }
+
+  /// 添加视频事件
+  ///
+  /// 通过 [TimelineService] 添加视频后自动刷新事件列表。
+  Future<void> addVideo(VideoChunk videoChunk) async {
     await refresh();
   }
 
@@ -222,6 +239,30 @@ class RecordingControlNotifier extends StateNotifier<AsyncValue<void>> {
     }
   }
 
+  /// 暂停总时间轴
+  ///
+  /// 暂停总时间轴计时器和录音，暂停期间不可添加任何事件。
+  Future<void> pauseTotalTimeline() async {
+    try {
+      final recordingService = _ref.read(recordingServiceProvider);
+      await recordingService.pauseTotalTimeline();
+    } catch (e, st) {
+      state = AsyncValue.error(e, st);
+    }
+  }
+
+  /// 继续总时间轴
+  ///
+  /// 恢复总时间轴计时器和录音。
+  Future<void> resumeTotalTimeline() async {
+    try {
+      final recordingService = _ref.read(recordingServiceProvider);
+      await recordingService.resumeTotalTimeline();
+    } catch (e, st) {
+      state = AsyncValue.error(e, st);
+    }
+  }
+
   /// 停止录音会话
   ///
   /// 保存最后一个音频分片，更新会话信息，清理时间轴服务。
@@ -265,8 +306,13 @@ class RecordingControlNotifier extends StateNotifier<AsyncValue<void>> {
   /// 拍照
   ///
   /// 调用相机服务拍照，将照片添加到时间轴。
+  /// 总时间轴暂停时不执行。
   Future<void> takePhoto() async {
     try {
+      // 检查总时间轴是否暂停
+      final recordingService = _ref.read(recordingServiceProvider);
+      if (recordingService.isTotalTimelinePaused) return;
+
       final cameraService = _ref.read(cameraServiceProvider);
       final result = await cameraService.takePhoto();
       if (result == null) return; // 用户取消
@@ -289,8 +335,13 @@ class RecordingControlNotifier extends StateNotifier<AsyncValue<void>> {
   /// 从相册选择照片
   ///
   /// 调用相机服务从相册选择照片，将照片添加到时间轴。
+  /// 总时间轴暂停时不执行。
   Future<void> pickPhotoFromGallery() async {
     try {
+      // 检查总时间轴是否暂停
+      final recordingService = _ref.read(recordingServiceProvider);
+      if (recordingService.isTotalTimelinePaused) return;
+
       final cameraService = _ref.read(cameraServiceProvider);
       final result = await cameraService.pickFromGallery();
       if (result == null) return; // 用户取消
@@ -314,8 +365,13 @@ class RecordingControlNotifier extends StateNotifier<AsyncValue<void>> {
   ///
   /// [content] 笔记内容
   /// [title] 笔记标题（可选）
+  /// 总时间轴暂停时不执行。
   Future<void> addTextNote(String content, {String? title}) async {
     try {
+      // 检查总时间轴是否暂停
+      final recordingService = _ref.read(recordingServiceProvider);
+      if (recordingService.isTotalTimelinePaused) return;
+
       final timelineNotifier = _ref.read(timelineEventsProvider.notifier);
       final timelineService = timelineNotifier._timelineService;
       if (timelineService == null) return;
@@ -331,8 +387,13 @@ class RecordingControlNotifier extends StateNotifier<AsyncValue<void>> {
   ///
   /// [label] 书签标签（可选）
   /// [color] 书签颜色（可选）
+  /// 总时间轴暂停时不执行。
   Future<void> addBookmark({String? label, String? color}) async {
     try {
+      // 检查总时间轴是否暂停
+      final recordingService = _ref.read(recordingServiceProvider);
+      if (recordingService.isTotalTimelinePaused) return;
+
       final timelineNotifier = _ref.read(timelineEventsProvider.notifier);
       final timelineService = timelineNotifier._timelineService;
       if (timelineService == null) return;
@@ -342,6 +403,31 @@ class RecordingControlNotifier extends StateNotifier<AsyncValue<void>> {
         color: color,
       );
       await timelineNotifier.addBookmark(bookmark);
+    } catch (e, st) {
+      state = AsyncValue.error(e, st);
+    }
+  }
+
+  /// 录制短视频
+  ///
+  /// 调用相机服务录制短视频，将视频添加到时间轴。
+  /// 总时间轴暂停时不执行。
+  Future<void> recordVideo() async {
+    try {
+      // 检查总时间轴是否暂停
+      final recordingService = _ref.read(recordingServiceProvider);
+      if (recordingService.isTotalTimelinePaused) return;
+
+      final cameraService = _ref.read(cameraServiceProvider);
+      final result = await cameraService.recordVideo();
+      if (result == null) return; // 用户取消
+
+      final timelineNotifier = _ref.read(timelineEventsProvider.notifier);
+      final timelineService = timelineNotifier._timelineService;
+      if (timelineService == null) return;
+
+      final videoChunk = await timelineService.addVideo(result.data);
+      await timelineNotifier.addVideo(videoChunk);
     } catch (e, st) {
       state = AsyncValue.error(e, st);
     }

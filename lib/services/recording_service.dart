@@ -22,6 +22,9 @@ enum RecordingState {
   /// 录音暂停（总时间轴运行中，录音暂停）
   paused,
 
+  /// 总时间轴暂停（所有操作暂停，不可添加事件）
+  totalPaused,
+
   /// 已停止
   stopped,
 }
@@ -93,6 +96,12 @@ class RecordingService {
   /// 当前分片录音开始时间（用于计算分片内录音时长）
   DateTime? _chunkRecordingStartTime;
 
+  /// 总时间轴的基准时间（用于计算已过时间）
+  DateTime? _totalTimelineBase;
+
+  /// 总时间轴暂停前已累计的时间（毫秒）
+  int _totalElapsedBeforePause = 0;
+
   // ==================== 定时器 ====================
 
   Timer? _tickTimer;
@@ -136,6 +145,9 @@ class RecordingService {
   /// 录音时间轴已过时间（毫秒）
   int get audioElapsedMs => _audioElapsedMs;
 
+  /// 总时间轴是否暂停
+  bool get isTotalTimelinePaused => _state == RecordingState.totalPaused;
+
   // ==================== Streams ====================
 
   /// 录音状态变化流
@@ -170,6 +182,8 @@ class RecordingService {
     _audioElapsedMs = 0;
     _chunkIndex = 0;
     _audioChunkStartMs = 0;
+    _totalElapsedBeforePause = 0;
+    _totalTimelineBase = null;
 
     // 开始第一段录音
     await _startRecordingChunk();
@@ -211,6 +225,53 @@ class RecordingService {
     _chunkRecordingStartTime = DateTime.now();
 
     // 重新启动自动分段计时器
+    _startChunkTimer();
+
+    _setState(RecordingState.recording);
+  }
+
+  /// 暂停总时间轴
+  ///
+  /// 暂停总时间轴计时器和录音（如果正在录音）。
+  /// 暂停期间不可添加任何事件。
+  Future<void> pauseTotalTimeline() async {
+    if (_state != RecordingState.recording && _state != RecordingState.paused) {
+      return;
+    }
+
+    // 保存当前累计的总时间
+    _totalElapsedBeforePause = _totalElapsedMs;
+
+    // 如果正在录音，先暂停录音
+    if (_state == RecordingState.recording) {
+      await _stopAndSaveCurrentChunk();
+      _chunkTimer?.cancel();
+      await _recorder.pause();
+    }
+
+    // 暂停总时间轴计时器
+    _tickTimer?.cancel();
+    _tickTimer = null;
+
+    _setState(RecordingState.totalPaused);
+  }
+
+  /// 继续总时间轴
+  ///
+  /// 恢复总时间轴计时器和录音。
+  Future<void> resumeTotalTimeline() async {
+    if (_state != RecordingState.totalPaused) return;
+
+    // 重置基准时间，保持时间连续性
+    _totalTimelineBase = DateTime.now();
+
+    // 恢复录音
+    _audioChunkStartMs = _audioElapsedMs;
+    await _recorder.resume();
+    _chunkRecordingStartTime = DateTime.now();
+
+    // 重启计时器
+    _startTickTimerFromPause();
     _startChunkTimer();
 
     _setState(RecordingState.recording);
@@ -259,19 +320,52 @@ class RecordingService {
     }
   }
 
-  /// 启动总时间轴计时器
+  /// 启动总时间轴计时器（首次启动）
   void _startTickTimer() {
     _tickTimer?.cancel();
     final startTime = DateTime.now();
+    _totalTimelineBase = startTime;
+    _totalElapsedBeforePause = 0;
     final audioResumeTime = DateTime.now();
     _chunkRecordingStartTime = audioResumeTime;
 
     _tickTimer = Timer.periodic(const Duration(milliseconds: 100), (_) {
       final now = DateTime.now();
-      _totalElapsedMs = now.difference(startTime).inMilliseconds;
+      _totalElapsedMs = _totalElapsedBeforePause +
+          now.difference(_totalTimelineBase!).inMilliseconds;
 
       if (_state == RecordingState.recording && _chunkRecordingStartTime != null) {
         // 录音时间 = 之前累计的录音时间 + 当前分片内录音时间
+        final chunkRecordingMs =
+            now.difference(_chunkRecordingStartTime!).inMilliseconds;
+        _audioElapsedMs = _audioChunkStartMs + chunkRecordingMs;
+      }
+
+      if (!_tickController.isClosed) {
+        _tickController.add(
+          RecordingTick(
+            totalElapsedMs: _totalElapsedMs,
+            audioElapsedMs: _audioElapsedMs,
+            state: _state,
+            chunkIndex: _chunkIndex,
+          ),
+        );
+      }
+    });
+  }
+
+  /// 从暂停状态恢复总时间轴计时器
+  void _startTickTimerFromPause() {
+    _tickTimer?.cancel();
+    // _totalTimelineBase 已在 resumeTotalTimeline 中设置为 DateTime.now()
+    // _totalElapsedBeforePause 已在 pauseTotalTimeline 中保存
+
+    _tickTimer = Timer.periodic(const Duration(milliseconds: 100), (_) {
+      final now = DateTime.now();
+      _totalElapsedMs = _totalElapsedBeforePause +
+          now.difference(_totalTimelineBase!).inMilliseconds;
+
+      if (_state == RecordingState.recording && _chunkRecordingStartTime != null) {
         final chunkRecordingMs =
             now.difference(_chunkRecordingStartTime!).inMilliseconds;
         _audioElapsedMs = _audioChunkStartMs + chunkRecordingMs;

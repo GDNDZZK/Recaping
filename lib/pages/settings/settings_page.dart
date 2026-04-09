@@ -1,5 +1,3 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -402,6 +400,22 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             final audioSizeStr = _formatBytes(stats.audioSizeBytes);
             final photosSizeStr = _formatBytes(stats.photosSizeBytes);
             final videosSizeStr = _formatBytes(stats.videosSizeBytes);
+            final otherSizeBytes = stats.totalSizeBytes -
+                stats.audioSizeBytes -
+                stats.photosSizeBytes -
+                stats.videosSizeBytes;
+            final otherSizeStr = _formatBytes(otherSizeBytes < 0 ? 0 : otherSizeBytes);
+
+            // 计算各分类占比
+            final audioRatio = stats.totalSizeBytes > 0
+                ? stats.audioSizeBytes / stats.totalSizeBytes
+                : 0.0;
+            final photosRatio = stats.totalSizeBytes > 0
+                ? stats.photosSizeBytes / stats.totalSizeBytes
+                : 0.0;
+            final videosRatio = stats.totalSizeBytes > 0
+                ? stats.videosSizeBytes / stats.totalSizeBytes
+                : 0.0;
 
             return Column(
               children: [
@@ -427,30 +441,56 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                 ),
                 const Divider(height: 1),
 
-                // 存储空间可视化
+                // 存储空间可视化（分类占比）
                 if (stats.totalSizeBytes > 0)
                   Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Row(
+                        // 图例
+                        Wrap(
+                          spacing: 12,
+                          runSpacing: 4,
                           children: [
-                            _StorageLegend(color: primaryColor, label: '音频 $audioSizeStr'),
-                            const SizedBox(width: 16),
-                            _StorageLegend(color: Colors.green, label: '照片 $photosSizeStr'),
-                            const SizedBox(width: 16),
-                            _StorageLegend(color: Colors.orange, label: '视频 $videosSizeStr'),
+                            _StorageLegend(
+                              color: primaryColor,
+                              label: '音频 $audioSizeStr (${(audioRatio * 100).toStringAsFixed(0)}%)',
+                            ),
+                            _StorageLegend(
+                              color: Colors.green,
+                              label: '照片 $photosSizeStr (${(photosRatio * 100).toStringAsFixed(0)}%)',
+                            ),
+                            _StorageLegend(
+                              color: Colors.orange,
+                              label: '视频 $videosSizeStr (${(videosRatio * 100).toStringAsFixed(0)}%)',
+                            ),
+                            _StorageLegend(
+                              color: Colors.grey,
+                              label: '其他 $otherSizeStr',
+                            ),
                           ],
                         ),
                         const SizedBox(height: 8),
+                        // 分类进度条
                         ClipRRect(
                           borderRadius: BorderRadius.circular(4),
-                          child: LinearProgressIndicator(
-                            value: 1.0,
-                            minHeight: 8,
-                            backgroundColor: Theme.of(context).colorScheme.surfaceContainerHighest,
-                            valueColor: AlwaysStoppedAnimation<Color>(primaryColor),
+                          child: SizedBox(
+                            height: 8,
+                            child: CustomPaint(
+                              painter: _StorageBarPainter(
+                                audioRatio: audioRatio,
+                                photosRatio: photosRatio,
+                                videosRatio: videosRatio,
+                                audioColor: primaryColor,
+                                photosColor: Colors.green,
+                                videosColor: Colors.orange,
+                                otherColor: Colors.grey.shade400,
+                                backgroundColor: Theme.of(context)
+                                    .colorScheme
+                                    .surfaceContainerHighest,
+                              ),
+                            ),
                           ),
                         ),
                       ],
@@ -459,19 +499,51 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
 
                 if (stats.totalSizeBytes > 0) const Divider(height: 1),
 
-                // 清除缓存按钮
+                // 清除临时文件按钮
                 ListTile(
                   leading: Icon(
                     Icons.cleaning_services,
                     color: Theme.of(context).colorScheme.error,
                   ),
                   title: Text(
-                    '清除缓存',
+                    '清除临时文件',
                     style: TextStyle(color: Theme.of(context).colorScheme.error),
                   ),
-                  subtitle: const Text('清除临时文件'),
+                  subtitle: const Text('删除 temp 目录下的所有文件'),
                   trailing: const Icon(Icons.chevron_right),
-                  onTap: _showClearCacheDialog,
+                  onTap: _showClearTempFilesDialog,
+                ),
+                const Divider(height: 1),
+
+                // 清理旧会话按钮
+                ListTile(
+                  leading: Icon(
+                    Icons.auto_delete,
+                    color: Theme.of(context).colorScheme.error,
+                  ),
+                  title: Text(
+                    '清理旧会话',
+                    style: TextStyle(color: Theme.of(context).colorScheme.error),
+                  ),
+                  subtitle: const Text('删除超过指定天数的旧会话'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: _showCleanOldSessionsDialog,
+                ),
+                const Divider(height: 1),
+
+                // 压缩媒体按钮
+                ListTile(
+                  leading: Icon(
+                    Icons.compress,
+                    color: Theme.of(context).colorScheme.error,
+                  ),
+                  title: Text(
+                    '压缩媒体',
+                    style: TextStyle(color: Theme.of(context).colorScheme.error),
+                  ),
+                  subtitle: const Text('重新生成更小的缩略图以节省空间'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: _showCompressMediaDialog,
                 ),
               ],
             );
@@ -507,12 +579,12 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     return '${size.toStringAsFixed(size < 10 ? 2 : 1)} ${units[unitIndex]}';
   }
 
-  /// 显示清除缓存确认对话框
-  Future<void> _showClearCacheDialog() async {
+  /// 显示清除临时文件确认对话框
+  Future<void> _showClearTempFilesDialog() async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('清除缓存'),
+        title: const Text('清除临时文件'),
         content: const Text('确定要清除所有临时文件吗？此操作不可撤销。'),
         actions: [
           TextButton(
@@ -532,22 +604,254 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
 
     if (confirmed == true) {
       try {
-        // 清除临时目录
-        final tempDir = Directory.systemTemp;
-        if (await tempDir.exists()) {
-          await tempDir.list().forEach((entity) {
-            if (entity is File) {
-              entity.deleteSync();
-            }
-          });
-        }
-        // 刷新存储统计
+        final storageService = await ref.read(storageServiceProvider.future);
+        final deletedCount = await storageService.clearTempFiles();
         ref.read(storageStatsProvider.notifier).refresh();
-        _showSnackBar('缓存已清除');
+        if (mounted) {
+          _showSnackBar('已清除 $deletedCount 个临时文件');
+        }
       } catch (e) {
         if (mounted) {
-          _showSnackBar('清除缓存失败：$e');
+          _showSnackBar('清除临时文件失败：$e');
         }
+      }
+    }
+  }
+
+  /// 显示清理旧会话对话框
+  ///
+  /// 弹出对话框选择天数（30/60/90/180天），确认后删除。
+  Future<void> _showCleanOldSessionsDialog() async {
+    final days = await showDialog<int>(
+      context: context,
+      builder: (context) => SimpleDialog(
+        title: const Text('清理旧会话'),
+        children: [
+          const Padding(
+            padding: EdgeInsets.fromLTRB(24, 0, 24, 8),
+            child: Text(
+              '选择要清理的会话时间范围，超过该时间未更新的会话将被永久删除。',
+              style: TextStyle(fontSize: 13),
+            ),
+          ),
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(context, 30),
+            child: const _RadioOption(
+              label: '30 天前',
+              description: '清理超过 30 天未更新的会话',
+              selected: false,
+            ),
+          ),
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(context, 60),
+            child: const _RadioOption(
+              label: '60 天前',
+              description: '清理超过 60 天未更新的会话',
+              selected: false,
+            ),
+          ),
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(context, 90),
+            child: const _RadioOption(
+              label: '90 天前',
+              description: '清理超过 90 天未更新的会话',
+              selected: false,
+            ),
+          ),
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(context, 180),
+            child: const _RadioOption(
+              label: '180 天前',
+              description: '清理超过 180 天未更新的会话',
+              selected: false,
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (days == null || !mounted) return;
+
+    // 二次确认
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('确认清理'),
+        content: Text('确定要删除所有超过 $days 天未更新的会话吗？此操作不可撤销。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.error,
+            ),
+            child: const Text('确认删除'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      try {
+        final storageService = await ref.read(storageServiceProvider.future);
+        final deletedIds = await storageService.cleanOldSessions(
+          olderThanDays: days,
+        );
+        // 刷新会话列表和存储统计
+        ref.read(sessionListProvider.notifier).loadSessions();
+        ref.read(storageStatsProvider.notifier).refresh();
+        if (mounted) {
+          _showSnackBar('已清理 ${deletedIds.length} 个旧会话');
+        }
+      } catch (e) {
+        if (mounted) {
+          _showSnackBar('清理旧会话失败：$e');
+        }
+      }
+    }
+  }
+
+  /// 显示压缩媒体对话框
+  ///
+  /// 弹出对话框选择压缩质量（低/中/高），显示节省的空间。
+  Future<void> _showCompressMediaDialog() async {
+    final quality = await showDialog<int>(
+      context: context,
+      builder: (context) => SimpleDialog(
+        title: const Text('压缩媒体'),
+        children: [
+          const Padding(
+            padding: EdgeInsets.fromLTRB(24, 0, 24, 8),
+            child: Text(
+              '重新生成更小的缩略图以节省存储空间。原图不会被修改。',
+              style: TextStyle(fontSize: 13),
+            ),
+          ),
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(context, 50),
+            child: const _RadioOption(
+              label: '高压缩',
+              description: '缩略图最大 50px，节省更多空间',
+              selected: false,
+            ),
+          ),
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(context, 80),
+            child: const _RadioOption(
+              label: '中压缩',
+              description: '缩略图最大 80px，平衡质量与空间',
+              selected: false,
+            ),
+          ),
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(context, 120),
+            child: const _RadioOption(
+              label: '低压缩',
+              description: '缩略图最大 120px，保留更多细节',
+              selected: false,
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (quality == null || !mounted) return;
+
+    // 确认对话框
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('确认压缩'),
+        content: Text(
+          '将对所有会话的照片缩略图重新生成为最大 ${quality}px，原图不会被修改。确定继续？',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('开始压缩'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    // 显示进度对话框
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const AlertDialog(
+        title: Text('正在压缩'),
+        content: Row(
+          children: [
+            CircularProgressIndicator(),
+            SizedBox(width: 16),
+            Text('正在重新生成缩略图...'),
+          ],
+        ),
+      ),
+    );
+
+    try {
+      final storageService = await ref.read(storageServiceProvider.future);
+      final sessions = await storageService.getAllSessions();
+      int totalSaved = 0;
+      int processedCount = 0;
+
+      for (final session in sessions) {
+        try {
+          final saved = await storageService.compressSessionMedia(
+            session.sessionId,
+            thumbnailMaxSize: quality,
+          );
+          totalSaved += saved;
+          processedCount++;
+        } catch (_) {
+          // 忽略单个会话压缩失败
+        }
+      }
+
+      // 关闭进度对话框
+      if (mounted) {
+        Navigator.of(context).pop();
+      }
+
+      // 刷新存储统计
+      ref.read(storageStatsProvider.notifier).refresh();
+
+      // 显示结果
+      if (mounted) {
+        final savedStr = _formatBytes(totalSaved);
+        showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('压缩完成'),
+            content: Text(
+              '已处理 $processedCount 个会话\n节省空间：$savedStr',
+            ),
+            actions: [
+              FilledButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('确定'),
+              ),
+            ],
+          ),
+        );
+      }
+    } catch (e) {
+      // 关闭进度对话框
+      if (mounted) {
+        Navigator.of(context).pop();
+      }
+      if (mounted) {
+        _showSnackBar('压缩媒体失败：$e');
       }
     }
   }
@@ -785,5 +1089,84 @@ class _StorageLegend extends StatelessWidget {
         ),
       ],
     );
+  }
+}
+
+/// 存储空间分段条形图绘制器
+///
+/// 使用 [CustomPaint] 绘制音频/照片/视频/其他的占比条形图。
+/// Author: GDNDZZK
+class _StorageBarPainter extends CustomPainter {
+  final double audioRatio;
+  final double photosRatio;
+  final double videosRatio;
+  final Color audioColor;
+  final Color photosColor;
+  final Color videosColor;
+  final Color otherColor;
+  final Color backgroundColor;
+
+  const _StorageBarPainter({
+    required this.audioRatio,
+    required this.photosRatio,
+    required this.videosRatio,
+    required this.audioColor,
+    required this.photosColor,
+    required this.videosColor,
+    required this.otherColor,
+    required this.backgroundColor,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    // 绘制背景
+    final bgPaint = Paint()..color = backgroundColor;
+    canvas.drawRect(
+      Rect.fromLTWH(0, 0, size.width, size.height),
+      bgPaint,
+    );
+
+    final otherRatio = (1.0 - audioRatio - photosRatio - videosRatio)
+        .clamp(0.0, 1.0);
+
+    double x = 0;
+
+    // 绘制音频段
+    if (audioRatio > 0) {
+      final paint = Paint()..color = audioColor;
+      final width = size.width * audioRatio;
+      canvas.drawRect(Rect.fromLTWH(x, 0, width, size.height), paint);
+      x += width;
+    }
+
+    // 绘制照片段
+    if (photosRatio > 0) {
+      final paint = Paint()..color = photosColor;
+      final width = size.width * photosRatio;
+      canvas.drawRect(Rect.fromLTWH(x, 0, width, size.height), paint);
+      x += width;
+    }
+
+    // 绘制视频段
+    if (videosRatio > 0) {
+      final paint = Paint()..color = videosColor;
+      final width = size.width * videosRatio;
+      canvas.drawRect(Rect.fromLTWH(x, 0, width, size.height), paint);
+      x += width;
+    }
+
+    // 绘制其他段
+    if (otherRatio > 0) {
+      final paint = Paint()..color = otherColor;
+      final width = size.width * otherRatio;
+      canvas.drawRect(Rect.fromLTWH(x, 0, width, size.height), paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _StorageBarPainter oldDelegate) {
+    return oldDelegate.audioRatio != audioRatio ||
+        oldDelegate.photosRatio != photosRatio ||
+        oldDelegate.videosRatio != videosRatio;
   }
 }

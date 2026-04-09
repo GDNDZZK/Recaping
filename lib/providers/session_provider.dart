@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/database/config_database.dart';
 import '../core/database/database_helper.dart';
 import '../models/session.dart';
+import '../services/export_service.dart';
 import '../services/storage_service.dart';
 import 'settings_provider.dart';
 
@@ -116,6 +117,23 @@ class SessionListNotifier extends StateNotifier<AsyncValue<List<Session>>> {
       }
     }
   }
+  /// 导入会话
+  ///
+  /// 从外部 .recp 文件导入会话，成功后刷新列表。
+  /// 返回导入的会话 ID，失败返回 null。
+  Future<String?> importSession() async {
+    try {
+      final exportService = await _ref.read(exportServiceProvider.future);
+      final sessionId = await exportService.importSession();
+      await loadSessions();
+      return sessionId;
+    } catch (e, st) {
+      if (mounted) {
+        state = AsyncValue.error(e, st);
+      }
+      return null;
+    }
+  }
 }
 
 /// 会话列表 Provider
@@ -140,7 +158,7 @@ class StorageStatsNotifier extends StateNotifier<AsyncValue<StorageStats?>> {
     try {
       state = const AsyncValue.loading();
       final storageService = await _ref.read(storageServiceProvider.future);
-      final stats = await storageService.getStorageStats();
+      final stats = await storageService.getDetailedStorageStats();
       if (mounted) {
         state = AsyncValue.data(stats);
       }
@@ -158,4 +176,11 @@ class StorageStatsNotifier extends StateNotifier<AsyncValue<StorageStats?>> {
 final storageStatsProvider =
     StateNotifierProvider<StorageStatsNotifier, AsyncValue<StorageStats?>>((ref) {
   return StorageStatsNotifier(ref);
+});
+
+/// 导出服务 Provider
+///
+/// Author: GDNDZZK
+final exportServiceProvider = FutureProvider<ExportService>((ref) {
+  return ExportService(DatabaseHelper());
 });

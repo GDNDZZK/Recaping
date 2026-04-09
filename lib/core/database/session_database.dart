@@ -326,7 +326,8 @@ class SessionDatabase {
 
   /// 获取所有时间轴事件（按时间戳排序）
   ///
-  /// 聚合照片、视频、笔记和书签数据为统一的 TimelineEvent 列表
+  /// 聚合照片、视频、笔记、书签和录音区间数据为统一的 TimelineEvent 列表。
+  /// 录音区间通过查询 audio_chunks 的最小 start_time 和最大 end_time 生成。
   Future<List<TimelineEvent>> getTimelineEvents() async {
     final events = <TimelineEvent>[];
 
@@ -387,6 +388,27 @@ class SessionDatabase {
           color: map['color'] as String? ?? '#FF6B6B',
         ),
       );
+    }
+
+    // 获取录音区间事件
+    // 查询所有 audio_chunks 的最小 start_time 和最大 end_time，
+    // 生成一个"录音"事件
+    final audioResult = await _db.rawQuery('''
+      SELECT MIN(start_time) as min_start, MAX(end_time) as max_end
+      FROM audio_chunks
+    ''');
+    if (audioResult.isNotEmpty) {
+      final minStart = audioResult.first['min_start'];
+      final maxEnd = audioResult.first['max_end'];
+      if (minStart != null && maxEnd != null) {
+        events.add(
+          TimelineEvent.fromAudio(
+            id: 'audio_recording',
+            startTime: minStart as int,
+            endTime: maxEnd as int,
+          ),
+        );
+      }
     }
 
     // 按时间戳排序
@@ -470,6 +492,26 @@ class SessionDatabase {
           color: map['color'] as String? ?? '#FF6B6B',
         ),
       );
+    }
+
+    // 录音区间事件（与时间范围有交集的录音）
+    final audioResult = await _db.rawQuery('''
+      SELECT MIN(start_time) as min_start, MAX(end_time) as max_end
+      FROM audio_chunks
+      WHERE start_time <= ? AND end_time >= ?
+    ''', [endMs, startMs]);
+    if (audioResult.isNotEmpty) {
+      final minStart = audioResult.first['min_start'];
+      final maxEnd = audioResult.first['max_end'];
+      if (minStart != null && maxEnd != null) {
+        events.add(
+          TimelineEvent.fromAudio(
+            id: 'audio_recording',
+            startTime: minStart as int,
+            endTime: maxEnd as int,
+          ),
+        );
+      }
     }
 
     events.sort((a, b) => a.timestamp.compareTo(b.timestamp));

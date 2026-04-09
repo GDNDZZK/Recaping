@@ -9,6 +9,7 @@ import '../models/bookmark.dart';
 import '../models/photo.dart';
 import '../models/text_note.dart';
 import '../models/timeline_event.dart';
+import '../models/video_chunk.dart';
 
 /// 时间轴服务
 ///
@@ -82,6 +83,40 @@ class TimelineService {
 
     await _db.insertPhoto(photo);
     return photo;
+  }
+
+  // ==================== 视频操作 ====================
+
+  /// 添加视频事件
+  ///
+  /// [videoData] 完整视频数据
+  /// [format] 视频格式（默认 mp4）
+  ///
+  /// 由于 Flutter 中无法精确分割视频流为 5 秒段，
+  /// 简化处理：将整个视频作为一个 VideoChunk 存储（chunk_index=0）。
+  /// 后续可以优化为真正的分段。
+  Future<VideoChunk> addVideo(
+    Uint8List videoData, {
+    String format = 'mp4',
+  }) async {
+    _ensureSessionActive();
+
+    final timestamp = _currentTimestamp;
+    final videoId = _uuid.v4();
+
+    final chunk = VideoChunk(
+      id: _uuid.v4(),
+      videoId: videoId,
+      chunkIndex: 0,
+      startTime: timestamp,
+      endTime: timestamp + AppConstants.videoChunkDurationMs,
+      data: videoData,
+      format: format,
+      thumbnail: null, // 视频缩略图生成较复杂，暂不实现
+    );
+
+    await _db.insertVideoChunk(chunk);
+    return chunk;
   }
 
   // ==================== 文字笔记操作 ====================
@@ -178,6 +213,9 @@ class TimelineService {
         await _db.deleteTextNote(eventId);
       case TimelineEventType.bookmark:
         await _db.deleteBookmark(eventId);
+      case TimelineEventType.audio:
+        // 录音区间事件不支持单独删除（由录音服务管理）
+        break;
     }
   }
 

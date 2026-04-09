@@ -2,11 +2,13 @@ import 'package:flutter/material.dart';
 
 import '../../models/timeline_event.dart';
 import 'timeline_event_item.dart';
+import 'zoomable_timeline.dart';
 
 /// 录音过程中的实时时间轴组件
 ///
 /// 纵向时间轴列表，展示所有已记录的事件节点。
 /// 新事件添加时自动滚动到底部。
+/// 支持三种缩放级别：compact（紧凑）、normal（正常）、detailed（详细）。
 /// Author: GDNDZZK
 class RecordingTimeline extends StatefulWidget {
   /// 时间轴事件列表
@@ -27,6 +29,9 @@ class RecordingTimeline extends StatefulWidget {
 
 class _RecordingTimelineState extends State<RecordingTimeline> {
   ScrollController? _internalController;
+
+  /// 当前缩放级别
+  TimelineZoomLevel _zoomLevel = TimelineZoomLevel.normal;
 
   @override
   void initState() {
@@ -71,40 +76,49 @@ class _RecordingTimelineState extends State<RecordingTimeline> {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
 
-    if (widget.events.isEmpty) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(32),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                Icons.timeline,
-                size: 48,
-                color: colorScheme.onSurface.withValues(alpha: 0.2),
-              ),
-              const SizedBox(height: 12),
-              Text(
-                '录音过程中，事件将显示在这里',
-                style: theme.textTheme.bodyMedium?.copyWith(
-                  color: colorScheme.onSurface.withValues(alpha: 0.4),
-                ),
-                textAlign: TextAlign.center,
-              ),
-            ],
-          ),
-        ),
-      );
-    }
-
-    return ListView.builder(
-      controller: widget.scrollController ?? _internalController,
-      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
-      itemCount: widget.events.length,
-      itemBuilder: (context, index) {
-        final event = widget.events[index];
-        return TimelineEventItem(event: event);
+    return ZoomableTimeline(
+      initialZoomLevel: _zoomLevel,
+      onZoomChanged: (level) {
+        setState(() {
+          _zoomLevel = level;
+        });
       },
+      child: widget.events.isEmpty
+          ? Center(
+              child: Padding(
+                padding: const EdgeInsets.all(32),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.timeline,
+                      size: 48,
+                      color: colorScheme.onSurface.withValues(alpha: 0.2),
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      '录音过程中，事件将显示在这里',
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: colorScheme.onSurface.withValues(alpha: 0.4),
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ],
+                ),
+              ),
+            )
+          : ListView.builder(
+              controller: widget.scrollController ?? _internalController,
+              padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+              itemCount: widget.events.length,
+              itemBuilder: (context, index) {
+                final event = widget.events[index];
+                return TimelineEventItem(
+                  event: event,
+                  zoomLevel: _zoomLevel,
+                );
+              },
+            ),
     );
   }
 }

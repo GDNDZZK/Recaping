@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
 
 import '../../models/timeline_event.dart';
+import 'zoomable_timeline.dart';
 
 /// 单个时间轴事件节点展示组件
 ///
 /// 布局：左侧时间 + 中间连接线/圆点 + 右侧内容卡片。
 /// 不同事件类型显示不同的图标和内容。
+/// 支持三种缩放级别：compact（紧凑）、normal（正常）、detailed（详细）。
 /// Author: GDNDZZK
 class TimelineEventItem extends StatelessWidget {
   /// 时间轴事件数据
@@ -14,10 +16,18 @@ class TimelineEventItem extends StatelessWidget {
   /// 点击回调
   final VoidCallback? onTap;
 
+  /// 缩放级别（默认 normal）
+  final TimelineZoomLevel zoomLevel;
+
+  /// 是否高亮显示（回放时使用）
+  final bool isHighlighted;
+
   const TimelineEventItem({
     super.key,
     required this.event,
     this.onTap,
+    this.zoomLevel = TimelineZoomLevel.normal,
+    this.isHighlighted = false,
   });
 
   @override
@@ -31,19 +41,25 @@ class TimelineEventItem extends StatelessWidget {
     // 事件类型对应的颜色
     final dotColor = _getEventColor(event.type, colorScheme);
 
+    // 缩放级别对应的间距
+    final bottomPadding = getEventSpacing(zoomLevel);
+
     return IntrinsicHeight(
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // 左侧时间戳
           SizedBox(
-            width: 48,
+            width: zoomLevel == TimelineZoomLevel.compact ? 40 : 48,
             child: Text(
               timestampStr,
               style: theme.textTheme.bodySmall?.copyWith(
-                color: colorScheme.onSurface.withValues(alpha: 0.6),
+                color: isHighlighted
+                    ? const Color(0xFF6B6BFF)
+                    : colorScheme.onSurface.withValues(alpha: 0.6),
                 fontFamily: 'monospace',
-                fontSize: 11,
+                fontSize: zoomLevel == TimelineZoomLevel.compact ? 10 : 11,
+                fontWeight: isHighlighted ? FontWeight.bold : FontWeight.normal,
               ),
               textAlign: TextAlign.right,
             ),
@@ -58,7 +74,7 @@ class TimelineEventItem extends StatelessWidget {
 
           // 右侧内容卡片
           Expanded(
-            child: _buildEventCard(context, theme, colorScheme),
+            child: _buildEventCard(context, theme, colorScheme, bottomPadding),
           ),
         ],
       ),
@@ -67,14 +83,32 @@ class TimelineEventItem extends StatelessWidget {
 
   /// 构建时间轴圆点和连接线
   Widget _buildTimelineDotAndLine(Color dotColor) {
+    const accentColor = Color(0xFF6B6BFF);
+    final dotSize = isHighlighted ? 14.0 : 12.0;
+
     return Column(
       children: [
         Container(
-          width: 12,
-          height: 12,
+          width: dotSize,
+          height: dotSize,
           decoration: BoxDecoration(
-            color: dotColor,
+            color: isHighlighted ? accentColor : dotColor,
             shape: BoxShape.circle,
+            border: isHighlighted
+                ? Border.all(
+                    color: accentColor.withValues(alpha: 0.3),
+                    width: 3,
+                  )
+                : null,
+            boxShadow: isHighlighted
+                ? [
+                    BoxShadow(
+                      color: accentColor.withValues(alpha: 0.4),
+                      blurRadius: 8,
+                      spreadRadius: 1,
+                    ),
+                  ]
+                : null,
           ),
         ),
         Expanded(
@@ -92,17 +126,34 @@ class TimelineEventItem extends StatelessWidget {
     BuildContext context,
     ThemeData theme,
     ColorScheme colorScheme,
+    double bottomPadding,
   ) {
+    const accentColor = Color(0xFF6B6BFF);
+
     return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
+      padding: EdgeInsets.only(bottom: bottomPadding),
       child: Material(
-        color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+        color: isHighlighted
+            ? accentColor.withValues(alpha: 0.1)
+            : colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
         borderRadius: BorderRadius.circular(8),
         child: InkWell(
           onTap: onTap,
           borderRadius: BorderRadius.circular(8),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Container(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(8),
+              border: isHighlighted
+                  ? Border.all(
+                      color: accentColor.withValues(alpha: 0.5),
+                      width: 1.5,
+                    )
+                  : null,
+            ),
+            padding: EdgeInsets.symmetric(
+              horizontal: zoomLevel == TimelineZoomLevel.compact ? 8 : 12,
+              vertical: zoomLevel == TimelineZoomLevel.compact ? 4 : 8,
+            ),
             child: _buildEventContent(theme, colorScheme),
           ),
         ),
@@ -121,11 +172,71 @@ class TimelineEventItem extends StatelessWidget {
         return _buildTextNoteContent(theme, colorScheme);
       case TimelineEventType.bookmark:
         return _buildBookmarkContent(theme, colorScheme);
+      case TimelineEventType.audio:
+        return _buildAudioContent(theme, colorScheme);
     }
   }
 
   /// 照片事件内容
   Widget _buildPhotoContent(ThemeData theme, ColorScheme colorScheme) {
+    final thumbnailSize = getThumbnailSize(zoomLevel);
+
+    // 紧凑模式：只显示图标和标签
+    if (zoomLevel == TimelineZoomLevel.compact) {
+      return Row(
+        children: [
+          Icon(Icons.camera_alt, size: 14, color: colorScheme.primary),
+          const SizedBox(width: 4),
+          Text(
+            '拍照',
+            style: theme.textTheme.bodySmall?.copyWith(
+              fontWeight: FontWeight.w500,
+              fontSize: 11,
+            ),
+          ),
+        ],
+      );
+    }
+
+    // 详细模式：更大的缩略图
+    if (zoomLevel == TimelineZoomLevel.detailed) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.camera_alt, size: 16, color: colorScheme.primary),
+              const SizedBox(width: 6),
+              Text(
+                '拍照',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
+          if (event.thumbnail != null) ...[
+            const SizedBox(height: 8),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(6),
+              child: Image.memory(
+                event.thumbnail!,
+                width: thumbnailSize,
+                height: thumbnailSize,
+                fit: BoxFit.cover,
+                errorBuilder: (_, __, ___) => SizedBox(
+                  width: thumbnailSize,
+                  height: thumbnailSize,
+                  child: const Icon(Icons.broken_image, size: 24),
+                ),
+              ),
+            ),
+          ],
+        ],
+      );
+    }
+
+    // 正常模式
     return Row(
       children: [
         Icon(Icons.camera_alt, size: 16, color: colorScheme.primary),
@@ -142,13 +253,13 @@ class TimelineEventItem extends StatelessWidget {
             borderRadius: BorderRadius.circular(4),
             child: Image.memory(
               event.thumbnail!,
-              width: 36,
-              height: 36,
+              width: thumbnailSize,
+              height: thumbnailSize,
               fit: BoxFit.cover,
-              errorBuilder: (_, __, ___) => const SizedBox(
-                width: 36,
-                height: 36,
-                child: Icon(Icons.broken_image, size: 16),
+              errorBuilder: (_, __, ___) => SizedBox(
+                width: thumbnailSize,
+                height: thumbnailSize,
+                child: const Icon(Icons.broken_image, size: 16),
               ),
             ),
           ),
@@ -158,6 +269,64 @@ class TimelineEventItem extends StatelessWidget {
 
   /// 视频事件内容
   Widget _buildVideoContent(ThemeData theme, ColorScheme colorScheme) {
+    final thumbnailSize = getThumbnailSize(zoomLevel);
+
+    // 紧凑模式：只显示图标和标签
+    if (zoomLevel == TimelineZoomLevel.compact) {
+      return Row(
+        children: [
+          Icon(Icons.videocam, size: 14, color: colorScheme.tertiary),
+          const SizedBox(width: 4),
+          Text(
+            '视频片段',
+            style: theme.textTheme.bodySmall?.copyWith(
+              fontWeight: FontWeight.w500,
+              fontSize: 11,
+            ),
+          ),
+        ],
+      );
+    }
+
+    // 详细模式：更大的缩略图
+    if (zoomLevel == TimelineZoomLevel.detailed) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.videocam, size: 16, color: colorScheme.tertiary),
+              const SizedBox(width: 6),
+              Text(
+                '视频片段',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
+          if (event.thumbnail != null) ...[
+            const SizedBox(height: 8),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(6),
+              child: Image.memory(
+                event.thumbnail!,
+                width: thumbnailSize,
+                height: thumbnailSize,
+                fit: BoxFit.cover,
+                errorBuilder: (_, __, ___) => SizedBox(
+                  width: thumbnailSize,
+                  height: thumbnailSize,
+                  child: const Icon(Icons.broken_image, size: 24),
+                ),
+              ),
+            ),
+          ],
+        ],
+      );
+    }
+
+    // 正常模式
     return Row(
       children: [
         Icon(Icons.videocam, size: 16, color: colorScheme.tertiary),
@@ -174,13 +343,13 @@ class TimelineEventItem extends StatelessWidget {
             borderRadius: BorderRadius.circular(4),
             child: Image.memory(
               event.thumbnail!,
-              width: 36,
-              height: 36,
+              width: thumbnailSize,
+              height: thumbnailSize,
               fit: BoxFit.cover,
-              errorBuilder: (_, __, ___) => const SizedBox(
-                width: 36,
-                height: 36,
-                child: Icon(Icons.broken_image, size: 16),
+              errorBuilder: (_, __, ___) => SizedBox(
+                width: thumbnailSize,
+                height: thumbnailSize,
+                child: const Icon(Icons.broken_image, size: 16),
               ),
             ),
           ),
@@ -190,6 +359,29 @@ class TimelineEventItem extends StatelessWidget {
 
   /// 文字笔记事件内容
   Widget _buildTextNoteContent(ThemeData theme, ColorScheme colorScheme) {
+    final maxLines = getTextMaxLines(zoomLevel);
+
+    // 紧凑模式：只显示图标和标题
+    if (zoomLevel == TimelineZoomLevel.compact) {
+      return Row(
+        children: [
+          Icon(Icons.edit_note, size: 14, color: colorScheme.secondary),
+          const SizedBox(width: 4),
+          Flexible(
+            child: Text(
+              event.label ?? '笔记',
+              style: theme.textTheme.bodySmall?.copyWith(
+                fontWeight: FontWeight.w500,
+                fontSize: 11,
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      );
+    }
+
+    // 正常/详细模式
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -212,7 +404,7 @@ class TimelineEventItem extends StatelessWidget {
             style: theme.textTheme.bodySmall?.copyWith(
               color: colorScheme.onSurface.withValues(alpha: 0.7),
             ),
-            maxLines: 2,
+            maxLines: maxLines,
             overflow: TextOverflow.ellipsis,
           ),
         ],
@@ -224,6 +416,27 @@ class TimelineEventItem extends StatelessWidget {
   Widget _buildBookmarkContent(ThemeData theme, ColorScheme colorScheme) {
     final bookmarkColor = _parseColor(event.color);
 
+    // 紧凑模式：只显示图标和标签
+    if (zoomLevel == TimelineZoomLevel.compact) {
+      return Row(
+        children: [
+          Icon(Icons.bookmark, size: 14, color: bookmarkColor),
+          const SizedBox(width: 4),
+          Flexible(
+            child: Text(
+              event.label ?? '书签',
+              style: theme.textTheme.bodySmall?.copyWith(
+                fontWeight: FontWeight.w500,
+                fontSize: 11,
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      );
+    }
+
+    // 正常/详细模式
     return Row(
       children: [
         Icon(Icons.bookmark, size: 16, color: bookmarkColor),
@@ -247,6 +460,92 @@ class TimelineEventItem extends StatelessWidget {
     );
   }
 
+  /// 录音区间事件内容
+  Widget _buildAudioContent(ThemeData theme, ColorScheme colorScheme) {
+    const audioColor = Color(0xFF4CAF50); // 绿色表示录音
+    final durationMs = event.audioDurationMs;
+    final durationStr = _formatDurationTag(durationMs);
+
+    // 紧凑模式：只显示图标和标签
+    if (zoomLevel == TimelineZoomLevel.compact) {
+      return Row(
+        children: [
+          const Icon(Icons.mic, size: 14, color: audioColor),
+          const SizedBox(width: 4),
+          Text(
+            '录音 $durationStr',
+            style: theme.textTheme.bodySmall?.copyWith(
+              fontWeight: FontWeight.w500,
+              fontSize: 11,
+            ),
+          ),
+        ],
+      );
+    }
+
+    // 正常/详细模式
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Icon(Icons.mic, size: 16, color: audioColor),
+            const SizedBox(width: 6),
+            Text(
+              '录音',
+              style: theme.textTheme.bodySmall?.copyWith(
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+            const Spacer(),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: audioColor.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Text(
+                durationStr,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: audioColor,
+                  fontWeight: FontWeight.w500,
+                  fontSize: 11,
+                  fontFamily: 'monospace',
+                ),
+              ),
+            ),
+          ],
+        ),
+        if (zoomLevel == TimelineZoomLevel.detailed && event.endTimestamp != null) ...[
+          const SizedBox(height: 4),
+          Text(
+            '${_formatTimestamp(event.timestamp)} → ${_formatTimestamp(event.endTimestamp!)}',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: colorScheme.onSurface.withValues(alpha: 0.5),
+              fontFamily: 'monospace',
+              fontSize: 11,
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  /// 格式化时长标签（毫秒 → 可读字符串）
+  String _formatDurationTag(int ms) {
+    final duration = Duration(milliseconds: ms);
+    final hours = duration.inHours;
+    final minutes = duration.inMinutes % 60;
+    final seconds = duration.inSeconds % 60;
+    if (hours > 0) {
+      return '${hours}h${minutes.toString().padLeft(2, '0')}m';
+    } else if (minutes > 0) {
+      return '${minutes}m${seconds.toString().padLeft(2, '0')}s';
+    } else {
+      return '${seconds}s';
+    }
+  }
+
   /// 格式化时间戳（毫秒 → MM:SS）
   String _formatTimestamp(int ms) {
     final duration = Duration(milliseconds: ms);
@@ -266,6 +565,8 @@ class TimelineEventItem extends StatelessWidget {
         return colorScheme.secondary;
       case TimelineEventType.bookmark:
         return _parseColor(event.color);
+      case TimelineEventType.audio:
+        return const Color(0xFF4CAF50);
     }
   }
 

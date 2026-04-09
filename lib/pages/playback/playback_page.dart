@@ -217,6 +217,26 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
               ),
             ),
             const PopupMenuItem(
+              value: 'export',
+              child: Row(
+                children: [
+                  Icon(Icons.file_upload, size: 20),
+                  SizedBox(width: 12),
+                  Text('导出'),
+                ],
+              ),
+            ),
+            const PopupMenuItem(
+              value: 'share',
+              child: Row(
+                children: [
+                  Icon(Icons.share, size: 20),
+                  SizedBox(width: 12),
+                  Text('分享'),
+                ],
+              ),
+            ),
+            const PopupMenuItem(
               value: 'ai',
               child: Row(
                 children: [
@@ -255,6 +275,9 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
           noteCount++;
         case TimelineEventType.bookmark:
           bookmarkCount++;
+        case TimelineEventType.audio:
+          // 录音区间事件不统计在快捷操作计数中
+          break;
       }
     }
 
@@ -624,9 +647,59 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
       case 'delete':
         _showDeleteConfirmDialog();
         break;
+      case 'export':
+        _handleExport();
+        break;
+      case 'share':
+        _handleShare();
+        break;
       case 'ai':
         context.push('/ai/${widget.sessionId}');
         break;
+    }
+  }
+
+  /// 处理导出会话
+  Future<void> _handleExport() async {
+    try {
+      final exportService = await ref.read(exportServiceProvider.future);
+      final exportPath = await exportService.exportSession(widget.sessionId);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('已导出到: $exportPath'),
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('导出失败: $e')),
+        );
+      }
+    }
+  }
+
+  /// 处理分享会话
+  Future<void> _handleShare() async {
+    try {
+      final exportService = await ref.read(exportServiceProvider.future);
+      // 获取会话标题
+      final sessionList = ref.read(sessionListProvider);
+      final session = sessionList.valueOrNull?.firstWhere(
+        (s) => s.sessionId == widget.sessionId,
+      );
+      await exportService.shareSession(
+        widget.sessionId,
+        title: session?.title,
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('分享失败: $e')),
+        );
+      }
     }
   }
 

@@ -96,7 +96,8 @@ class _RecordPageState extends ConsumerState<RecordPage>
     final audioMs = audioMsAsync.valueOrNull ?? 0;
     final isRecording = recordingState == RecordingState.recording;
     final isPaused = recordingState == RecordingState.paused;
-    final isActive = isRecording || isPaused;
+    final isTotalPaused = recordingState == RecordingState.totalPaused;
+    final isActive = isRecording || isPaused || isTotalPaused;
 
     // 监听控制状态错误
     ref.listen<AsyncValue<void>>(recordingControlProvider, (_, next) {
@@ -129,6 +130,7 @@ class _RecordPageState extends ConsumerState<RecordPage>
               audioMs: audioMs,
               isRecording: isRecording,
               isPaused: isPaused,
+              isTotalPaused: isTotalPaused,
               isLoading: controlState.isLoading,
             ),
 
@@ -149,6 +151,7 @@ class _RecordPageState extends ConsumerState<RecordPage>
               recordingState: recordingState,
               isActive: isActive,
               isRecording: isRecording,
+              isTotalPaused: isTotalPaused,
             ),
           ],
         ),
@@ -207,6 +210,7 @@ class _RecordPageState extends ConsumerState<RecordPage>
     required int audioMs,
     required bool isRecording,
     required bool isPaused,
+    required bool isTotalPaused,
     required bool isLoading,
   }) {
     final theme = Theme.of(context);
@@ -222,6 +226,7 @@ class _RecordPageState extends ConsumerState<RecordPage>
             colorScheme: colorScheme,
             isRecording: isRecording,
             isPaused: isPaused,
+            isTotalPaused: isTotalPaused,
             isLoading: isLoading,
             recordingState: recordingState,
           ),
@@ -288,6 +293,7 @@ class _RecordPageState extends ConsumerState<RecordPage>
     required ColorScheme colorScheme,
     required bool isRecording,
     required bool isPaused,
+    required bool isTotalPaused,
     required bool isLoading,
     required RecordingState recordingState,
   }) {
@@ -297,6 +303,9 @@ class _RecordPageState extends ConsumerState<RecordPage>
     if (isLoading) {
       dotColor = colorScheme.primary;
       statusText = '准备中...';
+    } else if (isTotalPaused) {
+      dotColor = Colors.orange;
+      statusText = '时间轴已暂停';
     } else if (isRecording) {
       dotColor = const Color(0xFFFF4444);
       statusText = '录音中';
@@ -353,6 +362,7 @@ class _RecordPageState extends ConsumerState<RecordPage>
     required RecordingState recordingState,
     required bool isActive,
     required bool isRecording,
+    required bool isTotalPaused,
   }) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
@@ -363,34 +373,100 @@ class _RecordPageState extends ConsumerState<RecordPage>
         color: colorScheme.surface,
         border: Border(
           top: BorderSide(
-            color: colorScheme.outlineVariant.withValues(alpha: 0.3),
+            color: isTotalPaused
+                ? Colors.orange.withValues(alpha: 0.5)
+                : colorScheme.outlineVariant.withValues(alpha: 0.3),
           ),
         ),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
+          // 总时间轴暂停提示
+          if (isTotalPaused)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.orange.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: Colors.orange.withValues(alpha: 0.3),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.lock_outline, size: 16, color: Colors.orange.shade700),
+                    const SizedBox(width: 8),
+                    Text(
+                      '时间轴已暂停，无法添加事件',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: Colors.orange.shade700,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
           // 快捷操作按钮组
           _buildQuickActions(
             context: context,
             isActive: isActive,
+            isTotalPaused: isTotalPaused,
             colorScheme: colorScheme,
             theme: theme,
           ),
 
           const SizedBox(height: 12),
 
-          // 录音控制按钮组
-          RecordingControls(
-            state: recordingState,
-            onStart: () => _startNewSession(),
-            onPause: () {
-              ref.read(recordingControlProvider.notifier).pauseRecording();
-            },
-            onResume: () {
-              ref.read(recordingControlProvider.notifier).resumeRecording();
-            },
-            onStop: () => _showStopConfirmDialog(),
+          // 录音控制按钮组（含总时间轴暂停按钮）
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              // 总时间轴暂停/继续按钮
+              if (isActive)
+                Padding(
+                  padding: const EdgeInsets.only(right: 16),
+                  child: IconButton.filled(
+                    onPressed: () {
+                      if (isTotalPaused) {
+                        ref.read(recordingControlProvider.notifier).resumeTotalTimeline();
+                      } else {
+                        ref.read(recordingControlProvider.notifier).pauseTotalTimeline();
+                      }
+                    },
+                    icon: Icon(
+                      isTotalPaused ? Icons.play_arrow : Icons.pause_circle_filled,
+                      size: 28,
+                    ),
+                    style: IconButton.styleFrom(
+                      backgroundColor: isTotalPaused
+                          ? Colors.green
+                          : Colors.orange,
+                      foregroundColor: Colors.white,
+                    ),
+                    tooltip: isTotalPaused ? '继续时间轴' : '暂停时间轴',
+                  ),
+                ),
+
+              // 录音控制按钮组
+              Expanded(
+                child: RecordingControls(
+                  state: recordingState,
+                  onStart: () => _startNewSession(),
+                  onPause: () {
+                    ref.read(recordingControlProvider.notifier).pauseRecording();
+                  },
+                  onResume: () {
+                    ref.read(recordingControlProvider.notifier).resumeRecording();
+                  },
+                  onStop: () => _showStopConfirmDialog(),
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -401,41 +477,47 @@ class _RecordPageState extends ConsumerState<RecordPage>
   Widget _buildQuickActions({
     required BuildContext context,
     required bool isActive,
+    required bool isTotalPaused,
     required ColorScheme colorScheme,
     required ThemeData theme,
   }) {
+    // 总时间轴暂停时禁用快捷操作
+    final quickActionsEnabled = isActive && !isTotalPaused;
+
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
       children: [
         _QuickActionButton(
           icon: Icons.camera_alt,
           label: '拍照',
-          enabled: isActive,
+          enabled: quickActionsEnabled,
           color: colorScheme.primary,
           onPressed: () => _handleTakePhoto(),
+          isLocked: isTotalPaused,
         ),
         _QuickActionButton(
           icon: Icons.videocam,
           label: '录视频',
-          enabled: false, // 暂不支持
+          enabled: quickActionsEnabled,
           color: colorScheme.tertiary,
-          onPressed: () {
-            // TODO(GDNDZZK): 实现录视频功能
-          },
+          onPressed: () => _handleRecordVideo(),
+          isLocked: isTotalPaused,
         ),
         _QuickActionButton(
           icon: Icons.edit_note,
           label: '笔记',
-          enabled: isActive,
+          enabled: quickActionsEnabled,
           color: colorScheme.secondary,
           onPressed: () => _showTextNoteBottomSheet(),
+          isLocked: isTotalPaused,
         ),
         _QuickActionButton(
           icon: Icons.bookmark,
           label: '书签',
-          enabled: isActive,
+          enabled: quickActionsEnabled,
           color: const Color(0xFFFF6B6B),
           onPressed: () => _showBookmarkBottomSheet(),
+          isLocked: isTotalPaused,
         ),
       ],
     );
@@ -446,6 +528,11 @@ class _RecordPageState extends ConsumerState<RecordPage>
   /// 处理拍照
   Future<void> _handleTakePhoto() async {
     await ref.read(recordingControlProvider.notifier).takePhoto();
+  }
+
+  /// 处理录制短视频
+  Future<void> _handleRecordVideo() async {
+    await ref.read(recordingControlProvider.notifier).recordVideo();
   }
 
   /// 显示文字笔记底部 Sheet
@@ -834,6 +921,7 @@ class _RecordPageState extends ConsumerState<RecordPage>
 /// 快捷操作按钮
 ///
 /// 圆形图标按钮 + 文字标签。
+/// [isLocked] 为 true 时显示锁定图标覆盖。
 /// Author: GDNDZZK
 class _QuickActionButton extends StatelessWidget {
   final IconData icon;
@@ -841,6 +929,7 @@ class _QuickActionButton extends StatelessWidget {
   final bool enabled;
   final Color color;
   final VoidCallback onPressed;
+  final bool isLocked;
 
   const _QuickActionButton({
     required this.icon,
@@ -848,6 +937,7 @@ class _QuickActionButton extends StatelessWidget {
     required this.enabled,
     required this.color,
     required this.onPressed,
+    this.isLocked = false,
   });
 
   @override
@@ -861,15 +951,37 @@ class _QuickActionButton extends StatelessWidget {
         SizedBox(
           width: 48,
           height: 48,
-          child: IconButton(
-            onPressed: enabled ? onPressed : null,
-            icon: Icon(icon, size: 24),
-            style: IconButton.styleFrom(
-              foregroundColor: effectiveColor,
-              backgroundColor: effectiveColor.withValues(alpha: 0.1),
-              disabledForegroundColor: Colors.grey.withValues(alpha: 0.5),
-              disabledBackgroundColor: Colors.grey.withValues(alpha: 0.05),
-            ),
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              IconButton(
+                onPressed: enabled ? onPressed : null,
+                icon: Icon(icon, size: 24),
+                style: IconButton.styleFrom(
+                  foregroundColor: effectiveColor,
+                  backgroundColor: effectiveColor.withValues(alpha: 0.1),
+                  disabledForegroundColor: Colors.grey.withValues(alpha: 0.5),
+                  disabledBackgroundColor: Colors.grey.withValues(alpha: 0.05),
+                ),
+              ),
+              if (isLocked)
+                Positioned(
+                  right: 2,
+                  top: 2,
+                  child: Container(
+                    padding: const EdgeInsets.all(2),
+                    decoration: BoxDecoration(
+                      color: Colors.orange.withValues(alpha: 0.9),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      Icons.lock,
+                      size: 10,
+                      color: Colors.white,
+                    ),
+                  ),
+                ),
+            ],
           ),
         ),
         const SizedBox(height: 4),

@@ -38,6 +38,12 @@ dependencies:
   # 网络
   http: ^1.2.0
 
+  # 文件分享
+  share_plus: ^7.2.1
+
+  # 文件选择（用于导入）
+  file_picker: any
+
   # 工具
   uuid: ^4.3.3
   intl: ^0.19.0

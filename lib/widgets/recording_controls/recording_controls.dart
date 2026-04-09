@@ -39,9 +39,10 @@ class RecordingControls extends StatelessWidget {
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        // 停止按钮（录音中或暂停时显示）
+        // 停止按钮（录音中、暂停或总时间轴暂停时显示）
         if (state == RecordingState.recording ||
-            state == RecordingState.paused)
+            state == RecordingState.paused ||
+            state == RecordingState.totalPaused)
           Padding(
             padding: const EdgeInsets.only(right: 24),
             child: _StopButton(onStop: onStop),
@@ -108,6 +109,15 @@ class _MainRecordButton extends StatelessWidget {
           size: 72,
           onPressed: onResume,
           tooltip: '继续录音',
+        );
+      case RecordingState.totalPaused:
+        // 总时间轴暂停时，录音控制按钮不可用（由总时间轴按钮控制恢复）
+        return _RecordButton(
+          icon: Icons.pause,
+          color: Colors.orange,
+          size: 72,
+          onPressed: () {}, // 空操作，由总时间轴按钮控制
+          tooltip: '时间轴已暂停',
         );
       case RecordingState.stopped:
         return _RecordButton(

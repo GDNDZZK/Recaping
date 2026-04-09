@@ -61,6 +61,12 @@ class _HomePageState extends ConsumerState<HomePage> {
           style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
         ),
         actions: [
+          // 导入按钮
+          IconButton(
+            icon: const Icon(Icons.file_download),
+            tooltip: '导入会话',
+            onPressed: _handleImport,
+          ),
           // 搜索按钮
           IconButton(
             icon: Icon(_isSearchExpanded ? Icons.close : Icons.search),
@@ -135,6 +141,26 @@ class _HomePageState extends ConsumerState<HomePage> {
         label: const Text('开始录音'),
       ),
     );
+  }
+
+  /// 处理导入会话
+  Future<void> _handleImport() async {
+    try {
+      final sessionId = await ref
+          .read(sessionListProvider.notifier)
+          .importSession();
+      if (sessionId != null && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('导入成功')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('导入失败: $e')),
+        );
+      }
+    }
   }
 
   /// 切换搜索栏展开/收起

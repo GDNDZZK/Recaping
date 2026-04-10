@@ -1,5 +1,3 @@
-import 'dart:typed_data';
-
 /// 时间轴事件类型枚举
 ///
 /// 定义时间轴上可以展示的事件类型。
@@ -45,8 +43,11 @@ class TimelineEvent {
   /// 文本内容（笔记内容等）
   final String? textContent;
 
-  /// 缩略图数据（照片/视频缩略图）
-  final Uint8List? thumbnail;
+  /// 缩略图文件路径（照片/视频缩略图的绝对路径）
+  final String? thumbnailPath;
+
+  /// 原始媒体文件路径（照片/视频的绝对路径，用于系统查看器打开）
+  final String? mediaFilePath;
 
   /// 录音结束时间戳（相对于会话开始的毫秒偏移，仅录音事件使用）
   final int? endTimestamp;
@@ -58,7 +59,8 @@ class TimelineEvent {
     this.label,
     this.color,
     this.textContent,
-    this.thumbnail,
+    this.thumbnailPath,
+    this.mediaFilePath,
     this.endTimestamp,
   });
 
@@ -66,13 +68,15 @@ class TimelineEvent {
   factory TimelineEvent.fromPhoto({
     required String id,
     required int timestamp,
-    Uint8List? thumbnail,
+    String? thumbnailPath,
+    String? mediaFilePath,
   }) {
     return TimelineEvent(
       id: id,
       type: TimelineEventType.photo,
       timestamp: timestamp,
-      thumbnail: thumbnail,
+      thumbnailPath: thumbnailPath,
+      mediaFilePath: mediaFilePath,
     );
   }
 
@@ -80,13 +84,15 @@ class TimelineEvent {
   factory TimelineEvent.fromVideo({
     required String id,
     required int timestamp,
-    Uint8List? thumbnail,
+    String? thumbnailPath,
+    String? mediaFilePath,
   }) {
     return TimelineEvent(
       id: id,
       type: TimelineEventType.video,
       timestamp: timestamp,
-      thumbnail: thumbnail,
+      thumbnailPath: thumbnailPath,
+      mediaFilePath: mediaFilePath,
     );
   }
 
@@ -126,16 +132,19 @@ class TimelineEvent {
   ///
   /// [startTime] 录音开始时间戳（毫秒偏移）
   /// [endTime] 录音结束时间戳（毫秒偏移）
+  /// [label] 录音标签（如 "录音 #1"）
   factory TimelineEvent.fromAudio({
     required String id,
     required int startTime,
     required int endTime,
+    String? label,
   }) {
     return TimelineEvent(
       id: id,
       type: TimelineEventType.audio,
       timestamp: startTime,
       endTimestamp: endTime,
+      label: label,
     );
   }
 
@@ -153,7 +162,8 @@ class TimelineEvent {
     String? label,
     String? color,
     String? textContent,
-    Uint8List? thumbnail,
+    String? thumbnailPath,
+    String? mediaFilePath,
     int? endTimestamp,
   }) {
     return TimelineEvent(
@@ -163,7 +173,8 @@ class TimelineEvent {
       label: label ?? this.label,
       color: color ?? this.color,
       textContent: textContent ?? this.textContent,
-      thumbnail: thumbnail ?? this.thumbnail,
+      thumbnailPath: thumbnailPath ?? this.thumbnailPath,
+      mediaFilePath: mediaFilePath ?? this.mediaFilePath,
       endTimestamp: endTimestamp ?? this.endTimestamp,
     );
   }

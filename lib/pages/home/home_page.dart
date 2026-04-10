@@ -75,7 +75,7 @@ class _HomePageState extends ConsumerState<HomePage> {
           // 设置按钮
           IconButton(
             icon: const Icon(Icons.settings),
-            onPressed: () => context.go('/settings'),
+            onPressed: () => context.push('/settings'),
           ),
         ],
         bottom: _isSearchExpanded
@@ -126,7 +126,7 @@ class _HomePageState extends ConsumerState<HomePage> {
                 final session = sessions[index];
                 return SessionCard(
                   session: session,
-                  onTap: () => context.go('/playback/${session.sessionId}'),
+                  onTap: () => context.push('/playback/${session.sessionId}'),
                   onLongPress: () => _showBottomMenu(session),
                   onDelete: () => _confirmDelete(session),
                 );
@@ -136,7 +136,7 @@ class _HomePageState extends ConsumerState<HomePage> {
         },
       ),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => context.go('/record'),
+        onPressed: () => context.push('/record'),
         icon: const Icon(Icons.fiber_manual_record, color: Colors.red),
         label: const Text('开始录音'),
       ),

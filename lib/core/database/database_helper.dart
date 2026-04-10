@@ -10,6 +10,8 @@ import '../constants/app_constants.dart';
 ///
 /// 负责管理数据库连接、目录结构和数据库文件的创建。
 /// 使用单例模式确保全局只有一个实例。
+///
+/// 新方案：每个会话一个目录，数据库文件在目录内，媒体文件在子目录中。
 /// Author: GDNDZZK
 class DatabaseHelper {
   static DatabaseHelper? _instance;
@@ -24,6 +26,12 @@ class DatabaseHelper {
 
   /// 全局配置数据库实例
   Database? _configDatabase;
+
+  /// 获取应用数据根目录
+  Future<String> get appDataPath async {
+    final appDir = await getApplicationDocumentsDirectory();
+    return appDir.path;
+  }
 
   /// 获取 sessions 目录路径
   Future<String> get sessionsPath async {
@@ -51,9 +59,29 @@ class DatabaseHelper {
     return p.join(appDir.path, AppConstants.configDbName);
   }
 
-  /// 打开或创建会话数据库（.recp 文件）
+  /// 获取会话目录路径
   ///
-  /// [sessionId] 会话唯一标识，用于构造文件名
+  /// [sessionId] 会话唯一标识
+  /// 返回会话目录的绝对路径
+  Future<String> sessionDirPath(String sessionId) async {
+    final basePath = await sessionsPath;
+    return p.join(basePath, sessionId);
+  }
+
+  /// 确保会话子目录存在
+  ///
+  /// 创建 audio/photos/videos/thumbnails 子目录。
+  Future<void> ensureSessionDirs(String sessionId) async {
+    final basePath = await sessionDirPath(sessionId);
+    await Directory(p.join(basePath, 'audio')).create(recursive: true);
+    await Directory(p.join(basePath, 'photos')).create(recursive: true);
+    await Directory(p.join(basePath, 'videos')).create(recursive: true);
+    await Directory(p.join(basePath, 'thumbnails')).create(recursive: true);
+  }
+
+  /// 打开或创建会话数据库（session.db）
+  ///
+  /// [sessionId] 会话唯一标识，用于构造目录和文件名
   /// 返回打开的 Database 实例
   Future<Database> openSessionDatabase(String sessionId) async {
     // 如果已缓存，直接返回
@@ -61,11 +89,11 @@ class DatabaseHelper {
       return _databases[sessionId]!;
     }
 
-    final sessionsDir = await sessionsPath;
-    final dbPath = p.join(
-      sessionsDir,
-      '$sessionId${AppConstants.recpFileExtension}',
-    );
+    // 确保会话目录存在
+    await ensureSessionDirs(sessionId);
+
+    final sessionDir = await sessionDirPath(sessionId);
+    final dbPath = p.join(sessionDir, 'session.db');
 
     final database = await openDatabase(
       dbPath,
@@ -122,19 +150,14 @@ class DatabaseHelper {
     await closeConfigDatabase();
   }
 
-  /// 删除指定会话的数据库文件
-  Future<void> deleteSessionDatabase(String sessionId) async {
+  /// 删除指定会话的整个目录（包含数据库和所有媒体文件）
+  Future<void> deleteSessionDirectory(String sessionId) async {
     await closeSessionDatabase(sessionId);
 
-    final sessionsDir = await sessionsPath;
-    final dbPath = p.join(
-      sessionsDir,
-      '$sessionId${AppConstants.recpFileExtension}',
-    );
-
-    final file = File(dbPath);
-    if (await file.exists()) {
-      await file.delete();
+    final sessionDir = await sessionDirPath(sessionId);
+    final dir = Directory(sessionDir);
+    if (await dir.exists()) {
+      await dir.delete(recursive: true);
     }
   }
 
@@ -154,21 +177,21 @@ class DatabaseHelper {
         )
       ''');
 
-      // 音频分片表
+      // 音频分片表（文件路径引用）
       await txn.execute('''
         CREATE TABLE IF NOT EXISTS audio_chunks (
           id TEXT PRIMARY KEY,
           chunk_index INTEGER NOT NULL,
           start_time INTEGER NOT NULL,
           end_time INTEGER NOT NULL,
-          data BLOB NOT NULL,
+          file_path TEXT NOT NULL,
           format TEXT NOT NULL DEFAULT 'aac',
           sample_rate INTEGER NOT NULL DEFAULT 44100,
           channels INTEGER NOT NULL DEFAULT 1
         )
       ''');
 
-      // 视频分片表
+      // 视频分片表（文件路径引用）
       await txn.execute('''
         CREATE TABLE IF NOT EXISTS video_chunks (
           id TEXT PRIMARY KEY,
@@ -176,19 +199,19 @@ class DatabaseHelper {
           chunk_index INTEGER NOT NULL,
           start_time INTEGER NOT NULL,
           end_time INTEGER NOT NULL,
-          data BLOB NOT NULL,
+          file_path TEXT NOT NULL,
           format TEXT NOT NULL DEFAULT 'mp4',
-          thumbnail BLOB
+          thumbnail_path TEXT
         )
       ''');
 
-      // 照片表
+      // 照片表（文件路径引用）
       await txn.execute('''
         CREATE TABLE IF NOT EXISTS photos (
           id TEXT PRIMARY KEY,
           timestamp INTEGER NOT NULL,
-          data BLOB NOT NULL,
-          thumbnail BLOB NOT NULL,
+          file_path TEXT NOT NULL,
+          thumbnail_path TEXT NOT NULL,
           format TEXT NOT NULL DEFAULT 'jpeg',
           width INTEGER NOT NULL DEFAULT 0,
           height INTEGER NOT NULL DEFAULT 0

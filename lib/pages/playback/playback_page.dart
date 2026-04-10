@@ -1,13 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:open_filex/open_filex.dart';
 
 import '../../core/utils/date_format_util.dart';
 import '../../models/timeline_event.dart';
 import '../../providers/playback_provider.dart';
 import '../../providers/session_provider.dart';
 import '../../widgets/audio/audio_player_controls.dart';
-import '../../widgets/common/image_viewer.dart';
 import '../../widgets/timeline/playback_timeline.dart';
 
 /// 回放页面
@@ -89,7 +89,13 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
         appBar: AppBar(
           leading: IconButton(
             icon: const Icon(Icons.arrow_back),
-            onPressed: () => context.pop(),
+            onPressed: () {
+              if (context.canPop()) {
+                context.pop();
+              } else {
+                context.go('/');
+              }
+            },
           ),
           title: const Text('加载中...'),
         ),
@@ -105,7 +111,13 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
         appBar: AppBar(
           leading: IconButton(
             icon: const Icon(Icons.arrow_back),
-            onPressed: () => context.pop(),
+            onPressed: () {
+              if (context.canPop()) {
+                context.pop();
+              } else {
+                context.go('/');
+              }
+            },
           ),
           title: const Text('回放'),
         ),
@@ -144,6 +156,16 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
 
     final events = eventsAsync.valueOrNull ?? [];
 
+    // 获取会话信息以计算总时长
+    final sessionList = ref.watch(sessionListProvider);
+    final session = sessionList.valueOrNull
+        ?.where((s) => s.sessionId == widget.sessionId)
+        .firstOrNull;
+    final totalDurationMs = session?.duration ??
+        (events.isNotEmpty
+            ? events.map((e) => e.timestamp).reduce((a, b) => a > b ? a : b)
+            : 0);
+
     return Scaffold(
       appBar: _buildAppBar(context, theme, colorScheme, accentColor),
       body: Column(
@@ -156,6 +178,7 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
             child: PlaybackTimeline(
               events: events,
               currentPlaybackMs: position.inMilliseconds,
+              totalDurationMs: totalDurationMs,
               onEventTap: (timestampMs) {
                 ref
                     .read(playbackControlProvider.notifier)
@@ -186,7 +209,13 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
     return AppBar(
       leading: IconButton(
         icon: const Icon(Icons.arrow_back),
-        onPressed: () => context.pop(),
+        onPressed: () {
+          if (context.canPop()) {
+            context.pop();
+          } else {
+            context.go('/');
+          }
+        },
       ),
       title: const Text('回放'),
       actions: [
@@ -283,9 +312,9 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
 
     // 获取会话信息（尝试从 session list provider 获取）
     final sessionList = ref.watch(sessionListProvider);
-    final session = sessionList.valueOrNull?.firstWhere(
-      (s) => s.sessionId == widget.sessionId,
-    );
+    final session = sessionList.valueOrNull
+        ?.where((s) => s.sessionId == widget.sessionId)
+        .firstOrNull;
 
     final title = session?.title ?? '回放';
     final createdAt = session?.createdAt ?? DateTime.now();
@@ -453,13 +482,20 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
   // ==================== 事件详情处理 ====================
 
   /// 处理照片事件点击
-  void _handlePhotoTap(TimelineEvent event) {
-    if (event.thumbnail != null) {
-      showImageViewer(
-        context,
-        imageData: event.thumbnail!,
-        description: '照片 - ${_formatTimestamp(event.timestamp)}',
-      );
+  ///
+  /// 使用系统自带查看器打开照片文件。
+  Future<void> _handlePhotoTap(TimelineEvent event) async {
+    final filePath = event.mediaFilePath ?? event.thumbnailPath;
+    if (filePath != null) {
+      final result = await OpenFilex.open(filePath);
+      if (result.type != ResultType.done && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('无法打开照片: ${result.message}'),
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
     }
   }
 
@@ -626,14 +662,30 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
   }
 
   /// 处理视频事件点击
-  void _handleVideoTap(TimelineEvent event) {
-    // 视频播放暂未实现，显示提示
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('视频播放功能即将推出'),
-        duration: Duration(seconds: 2),
-      ),
-    );
+  ///
+  /// 使用系统自带播放器打开视频文件。
+  Future<void> _handleVideoTap(TimelineEvent event) async {
+    final filePath = event.mediaFilePath;
+    if (filePath != null) {
+      final result = await OpenFilex.open(filePath);
+      if (result.type != ResultType.done && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('无法打开视频: ${result.message}'),
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+    } else {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('视频文件路径不可用'),
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
+    }
   }
 
   // ==================== 菜单操作 ====================
@@ -687,9 +739,9 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
       final exportService = await ref.read(exportServiceProvider.future);
       // 获取会话标题
       final sessionList = ref.read(sessionListProvider);
-      final session = sessionList.valueOrNull?.firstWhere(
-        (s) => s.sessionId == widget.sessionId,
-      );
+      final session = sessionList.valueOrNull
+          ?.where((s) => s.sessionId == widget.sessionId)
+          .firstOrNull;
       await exportService.shareSession(
         widget.sessionId,
         title: session?.title,
@@ -706,9 +758,9 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
   /// 显示编辑标题对话框
   void _showEditTitleDialog() {
     final sessionList = ref.read(sessionListProvider);
-    final session = sessionList.valueOrNull?.firstWhere(
-      (s) => s.sessionId == widget.sessionId,
-    );
+    final session = sessionList.valueOrNull
+        ?.where((s) => s.sessionId == widget.sessionId)
+        .firstOrNull;
 
     final titleController = TextEditingController(
       text: session?.title ?? '',

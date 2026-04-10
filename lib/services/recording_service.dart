@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -10,6 +9,43 @@ import 'package:uuid/uuid.dart';
 import '../core/constants/app_constants.dart';
 import '../core/database/session_database.dart';
 import '../models/audio_chunk.dart';
+
+/// 音频振幅数据
+///
+/// 包含当前振幅和最大振幅（dBFS 值）。
+/// dBFS 值范围通常为 -60dB 到 0dB。
+/// Author: GDNDZZK
+class AudioAmplitude {
+  /// 当前振幅（dBFS）
+  final double current;
+
+  /// 最大振幅（dBFS）
+  final double max;
+
+  const AudioAmplitude({
+    required this.current,
+    required this.max,
+  });
+
+  /// 将 dBFS 值转换为 0.0 ~ 1.0 的可视化高度
+  ///
+  /// dBFS 范围：-60dB（静音）到 0dB（最大）
+  /// 返回值：0.0（静音）到 1.0（最大）
+  double toNormalizedHeight() {
+    // dBFS 值为负数，越接近 0 表示声音越大
+    // 将 -60 ~ 0 映射到 0.0 ~ 1.0
+    const minDb = -60.0;
+    const maxDb = 0.0;
+    
+    // 使用 current 值计算
+    final normalized = (current - minDb) / (maxDb - minDb);
+    // 限制在 0.0 ~ 1.0 范围内
+    return normalized.clamp(0.0, 1.0);
+  }
+
+  @override
+  String toString() => 'AudioAmplitude(current: $current dB, max: $max dB)';
+}
 
 /// 录音状态枚举
 enum RecordingState {
@@ -68,7 +104,8 @@ class RecordingTick {
 /// - **总时间轴**：从开始到结束的真实时间，始终递增
 /// - **录音时间轴**：可在总时间轴内独立暂停/继续
 ///
-/// 录音输出到临时文件，每 15 秒自动分段，将音频数据读取为 [Uint8List] 后存入数据库。
+/// 录音输出到临时文件，每 15 秒自动分段，将音频文件移动到会话目录的 audio/ 子目录，
+/// 数据库只存储文件路径引用。
 /// Author: GDNDZZK
 class RecordingService {
   final AudioRecorder _recorder = AudioRecorder();
@@ -111,6 +148,12 @@ class RecordingService {
 
   final _stateController = StreamController<RecordingState>.broadcast();
   final _tickController = StreamController<RecordingTick>.broadcast();
+  final _amplitudeController = StreamController<AudioAmplitude>.broadcast();
+
+  // ==================== 振幅监听 ====================
+
+  /// 振幅流订阅
+  StreamSubscription<Amplitude>? _amplitudeSubscription;
 
   // ==================== 数据库引用 ====================
 
@@ -156,11 +199,17 @@ class RecordingService {
   /// 录音计时更新流（每 100ms 触发一次）
   Stream<RecordingTick> get onTick => _tickController.stream;
 
+  /// 音频振幅更新流
+  ///
+  /// 仅在录音状态下有数据，暂停或停止时无数据。
+  /// 振幅数据为 dBFS 值，范围通常为 -60dB 到 0dB。
+  Stream<AudioAmplitude> get onAmplitude => _amplitudeController.stream;
+
   // ==================== 公共方法 ====================
 
   /// 开始新的录音会话
   ///
-  /// [sessionDb] 会话数据库实例，用于存储音频分片数据
+  /// [sessionDb] 会话数据库实例，用于存储音频分片元数据
   ///
   /// 返回新创建的会话 ID
   ///
@@ -216,13 +265,12 @@ class RecordingService {
   Future<void> resumeRecording() async {
     if (_state != RecordingState.paused) return;
 
+    // 递增分片序号，创建新的音频分片
+    _chunkIndex++;
     _audioChunkStartMs = _audioElapsedMs;
 
-    // 恢复录音器
-    await _recorder.resume();
-
-    // 记录分片录音开始时间
-    _chunkRecordingStartTime = DateTime.now();
+    // 开始新的录音分片
+    await _startRecordingChunk();
 
     // 重新启动自动分段计时器
     _startChunkTimer();
@@ -284,12 +332,17 @@ class RecordingService {
     if (_state == RecordingState.idle) return;
 
     if (_state == RecordingState.recording) {
-      // 保存当前正在录音的分片
+      // 保存当前正在录音的分片（内部会调用 _recorder.stop()）
       await _stopAndSaveCurrentChunk();
+    } else if (_state == RecordingState.paused ||
+        _state == RecordingState.totalPaused) {
+      // 暂停状态下录音器已暂停，需要停止录音器
+      try {
+        await _recorder.stop();
+      } catch (_) {
+        // 录音器可能已经停止，忽略错误
+      }
     }
-
-    // 停止录音器
-    await _recorder.stop();
 
     // 停止所有计时器
     _tickTimer?.cancel();
@@ -297,7 +350,12 @@ class RecordingService {
     _chunkTimer?.cancel();
     _chunkTimer = null;
 
-    _setState(RecordingState.stopped);
+    // 重置状态为 idle，允许再次启动新会话
+    _setState(RecordingState.idle);
+    _currentSessionId = null;
+    _sessionDb = null;
+    _currentChunkFilePath = null;
+    _chunkRecordingStartTime = null;
   }
 
   /// 释放资源
@@ -307,6 +365,8 @@ class RecordingService {
     await stopSession();
     await _stateController.close();
     await _tickController.close();
+    await _amplitudeController.close();
+    _stopAmplitudeListening();
     await _recorder.dispose();
   }
 
@@ -421,11 +481,46 @@ class RecordingService {
 
     await _recorder.start(config, path: _currentChunkFilePath!);
     _chunkRecordingStartTime = DateTime.now();
+
+    // 启动振幅监听（每 100ms 更新一次）
+    _startAmplitudeListening();
   }
 
-  /// 停止当前录音分片，读取音频数据并保存到数据库
+  /// 启动振幅监听
+  ///
+  /// 使用 `record` 包的 `onAmplitudeChanged` 方法获取实时振幅数据。
+  /// 振幅更新频率为 100ms，与 UI 刷新频率匹配。
+  void _startAmplitudeListening() {
+    _amplitudeSubscription?.cancel();
+    _amplitudeSubscription = _recorder.onAmplitudeChanged(const Duration(milliseconds: 100)).listen(
+      (amplitude) {
+        if (!_amplitudeController.isClosed) {
+          _amplitudeController.add(
+            AudioAmplitude(
+              current: amplitude.current,
+              max: amplitude.max,
+            ),
+          );
+        }
+      },
+      onError: (error) {
+        // 振幅监听出错时忽略，不影响录音流程
+      },
+    );
+  }
+
+  /// 停止振幅监听
+  void _stopAmplitudeListening() {
+    _amplitudeSubscription?.cancel();
+    _amplitudeSubscription = null;
+  }
+
+  /// 停止当前录音分片，将音频文件移动到会话目录，数据库存路径引用
   Future<void> _stopAndSaveCurrentChunk() async {
     if (_currentChunkFilePath == null) return;
+
+    // 停止振幅监听
+    _stopAmplitudeListening();
 
     // 停止录音，获取输出文件路径
     final outputPath = await _recorder.stop();
@@ -434,10 +529,9 @@ class RecordingService {
     final file = File(outputPath);
     if (!await file.exists()) return;
 
-    // 读取音频数据
-    final audioData = await file.readAsBytes();
-
-    if (audioData.isEmpty) {
+    // 检查文件大小
+    final fileSize = await file.length();
+    if (fileSize == 0) {
       // 空数据，删除临时文件
       await file.delete();
       return;
@@ -447,27 +541,40 @@ class RecordingService {
     final chunkStartTime = _audioChunkStartMs;
     final chunkEndTime = _audioElapsedMs;
 
-    // 创建 AudioChunk 并保存到数据库
+    // 将音频文件移动到会话目录的 audio/ 子目录
     if (_sessionDb != null) {
+      final relativePath = 'audio/chunk_$_chunkIndex.aac';
+      final absolutePath = await _sessionDb!.resolvePath(relativePath);
+
+      // 确保目标目录存在
+      final dir = Directory(p.dirname(absolutePath));
+      if (!await dir.exists()) {
+        await dir.create(recursive: true);
+      }
+
+      // 移动文件到会话目录
+      await file.rename(absolutePath);
+
+      // 创建 AudioChunk 并保存到数据库（只存路径引用）
       final chunk = AudioChunk(
         id: _uuid.v4(),
         chunkIndex: _chunkIndex,
         startTime: chunkStartTime,
         endTime: chunkEndTime,
-        data: Uint8List.fromList(audioData),
+        filePath: relativePath,
         format: AppConstants.defaultAudioFormat,
         sampleRate: AppConstants.defaultSampleRate,
         channels: AppConstants.defaultChannels,
       );
 
       await _sessionDb!.insertAudioChunk(chunk);
-    }
-
-    // 删除临时文件
-    try {
-      await file.delete();
-    } catch (_) {
-      // 忽略临时文件删除失败
+    } else {
+      // 没有数据库引用，删除临时文件
+      try {
+        await file.delete();
+      } catch (_) {
+        // 忽略临时文件删除失败
+      }
     }
 
     _currentChunkFilePath = null;

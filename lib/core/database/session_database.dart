@@ -1,6 +1,6 @@
 import 'dart:io';
-import 'dart:typed_data';
 
+import 'package:path/path.dart' as p;
 import 'package:sqflite/sqflite.dart';
 
 import '../../models/ai_result.dart';
@@ -15,26 +15,39 @@ import 'database_helper.dart';
 
 /// 会话数据库操作类
 ///
-/// 封装对单个 .recp 文件（SQLite 数据库）的所有 CRUD 操作。
-/// 每个 .recp 文件包含一个会话的所有数据。
+/// 封装对单个会话目录中 session.db 数据库的所有 CRUD 操作。
+/// 数据库只存储元数据和文件路径引用，实际媒体数据存储在文件系统中。
 /// Author: GDNDZZK
 class SessionDatabase {
   final Database _db;
+  final String _sessionId;
 
-  SessionDatabase._(this._db);
+  SessionDatabase._(this._db, this._sessionId);
 
   /// 创建 SessionDatabase 实例
   ///
-  /// [sessionId] 会话唯一标识，用于打开对应的 .recp 文件
+  /// [sessionId] 会话唯一标识，用于打开对应的 session.db 文件
   static Future<SessionDatabase> create(String sessionId) async {
     final dbHelper = DatabaseHelper();
     final db = await dbHelper.openSessionDatabase(sessionId);
-    return SessionDatabase._(db);
+    return SessionDatabase._(db, sessionId);
   }
 
   /// 从已有的 Database 实例创建
-  static SessionDatabase fromDatabase(Database db) {
-    return SessionDatabase._(db);
+  static SessionDatabase fromDatabase(Database db, String sessionId) {
+    return SessionDatabase._(db, sessionId);
+  }
+
+  /// 获取会话目录的绝对路径
+  Future<String> get sessionDirPath async {
+    final dbHelper = DatabaseHelper();
+    return dbHelper.sessionDirPath(_sessionId);
+  }
+
+  /// 将相对路径转换为绝对路径
+  Future<String> resolvePath(String relativePath) async {
+    final dir = await sessionDirPath;
+    return p.join(dir, relativePath);
   }
 
   // ==================== info 表操作 ====================
@@ -327,25 +340,32 @@ class SessionDatabase {
   /// 获取所有时间轴事件（按时间戳排序）
   ///
   /// 聚合照片、视频、笔记、书签和录音区间数据为统一的 TimelineEvent 列表。
-  /// 录音区间通过查询 audio_chunks 的最小 start_time 和最大 end_time 生成。
+  /// 照片和视频的缩略图使用文件路径引用。
   Future<List<TimelineEvent>> getTimelineEvents() async {
     final events = <TimelineEvent>[];
 
     // 获取照片事件
     final photos = await _db.query('photos', orderBy: 'timestamp ASC');
     for (final map in photos) {
+      final thumbnailPath = map['thumbnail_path'] as String?;
+      final filePath = map['file_path'] as String?;
       events.add(
         TimelineEvent.fromPhoto(
           id: map['id'] as String,
           timestamp: map['timestamp'] as int,
-          thumbnail: map['thumbnail'] as Uint8List?,
+          thumbnailPath: thumbnailPath != null
+              ? await resolvePath(thumbnailPath)
+              : null,
+          mediaFilePath: filePath != null
+              ? await resolvePath(filePath)
+              : null,
         ),
       );
     }
 
     // 获取视频事件（取每个 videoId 的第一个分片）
     final videoResults = await _db.rawQuery('''
-      SELECT id, start_time, thumbnail
+      SELECT id, start_time, thumbnail_path, file_path
       FROM video_chunks
       WHERE chunk_index = (
         SELECT MIN(chunk_index)
@@ -355,11 +375,18 @@ class SessionDatabase {
       ORDER BY start_time ASC
     ''');
     for (final map in videoResults) {
+      final thumbnailPath = map['thumbnail_path'] as String?;
+      final filePath = map['file_path'] as String?;
       events.add(
         TimelineEvent.fromVideo(
           id: map['id'] as String,
           timestamp: map['start_time'] as int,
-          thumbnail: map['thumbnail'] as Uint8List?,
+          thumbnailPath: thumbnailPath != null
+              ? await resolvePath(thumbnailPath)
+              : null,
+          mediaFilePath: filePath != null
+              ? await resolvePath(filePath)
+              : null,
         ),
       );
     }
@@ -390,25 +417,21 @@ class SessionDatabase {
       );
     }
 
-    // 获取录音区间事件
-    // 查询所有 audio_chunks 的最小 start_time 和最大 end_time，
-    // 生成一个"录音"事件
-    final audioResult = await _db.rawQuery('''
-      SELECT MIN(start_time) as min_start, MAX(end_time) as max_end
-      FROM audio_chunks
-    ''');
-    if (audioResult.isNotEmpty) {
-      final minStart = audioResult.first['min_start'];
-      final maxEnd = audioResult.first['max_end'];
-      if (minStart != null && maxEnd != null) {
-        events.add(
-          TimelineEvent.fromAudio(
-            id: 'audio_recording',
-            startTime: minStart as int,
-            endTime: maxEnd as int,
-          ),
-        );
-      }
+    // 获取录音区间事件（每个 audio_chunk 作为独立事件）
+    final audioChunks = await _db.query(
+      'audio_chunks',
+      orderBy: 'chunk_index ASC',
+    );
+    for (final map in audioChunks) {
+      final chunkIndex = (map['chunk_index'] as int?) ?? 0;
+      events.add(
+        TimelineEvent.fromAudio(
+          id: map['id'] as String,
+          startTime: map['start_time'] as int,
+          endTime: map['end_time'] as int,
+          label: '录音 #${chunkIndex + 1}',
+        ),
+      );
     }
 
     // 按时间戳排序
@@ -432,11 +455,18 @@ class SessionDatabase {
       orderBy: 'timestamp ASC',
     );
     for (final map in photos) {
+      final thumbnailPath = map['thumbnail_path'] as String?;
+      final filePath = map['file_path'] as String?;
       events.add(
         TimelineEvent.fromPhoto(
           id: map['id'] as String,
           timestamp: map['timestamp'] as int,
-          thumbnail: map['thumbnail'] as Uint8List?,
+          thumbnailPath: thumbnailPath != null
+              ? await resolvePath(thumbnailPath)
+              : null,
+          mediaFilePath: filePath != null
+              ? await resolvePath(filePath)
+              : null,
         ),
       );
     }
@@ -449,11 +479,18 @@ class SessionDatabase {
       orderBy: 'start_time ASC',
     );
     for (final map in videos) {
+      final thumbnailPath = map['thumbnail_path'] as String?;
+      final filePath = map['file_path'] as String?;
       events.add(
         TimelineEvent.fromVideo(
           id: map['id'] as String,
           timestamp: map['start_time'] as int,
-          thumbnail: map['thumbnail'] as Uint8List?,
+          thumbnailPath: thumbnailPath != null
+              ? await resolvePath(thumbnailPath)
+              : null,
+          mediaFilePath: filePath != null
+              ? await resolvePath(filePath)
+              : null,
         ),
       );
     }
@@ -494,24 +531,23 @@ class SessionDatabase {
       );
     }
 
-    // 录音区间事件（与时间范围有交集的录音）
-    final audioResult = await _db.rawQuery('''
-      SELECT MIN(start_time) as min_start, MAX(end_time) as max_end
-      FROM audio_chunks
-      WHERE start_time <= ? AND end_time >= ?
-    ''', [endMs, startMs]);
-    if (audioResult.isNotEmpty) {
-      final minStart = audioResult.first['min_start'];
-      final maxEnd = audioResult.first['max_end'];
-      if (minStart != null && maxEnd != null) {
-        events.add(
-          TimelineEvent.fromAudio(
-            id: 'audio_recording',
-            startTime: minStart as int,
-            endTime: maxEnd as int,
-          ),
-        );
-      }
+    // 录音区间事件（每个 audio_chunk 作为独立事件，与时间范围有交集的）
+    final audioChunks = await _db.query(
+      'audio_chunks',
+      where: 'start_time <= ? AND end_time >= ?',
+      whereArgs: [endMs, startMs],
+      orderBy: 'chunk_index ASC',
+    );
+    for (final map in audioChunks) {
+      final chunkIndex = (map['chunk_index'] as int?) ?? 0;
+      events.add(
+        TimelineEvent.fromAudio(
+          id: map['id'] as String,
+          startTime: map['start_time'] as int,
+          endTime: map['end_time'] as int,
+          label: '录音 #${chunkIndex + 1}',
+        ),
+      );
     }
 
     events.sort((a, b) => a.timestamp.compareTo(b.timestamp));

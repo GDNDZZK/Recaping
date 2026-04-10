@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:path/path.dart' as p;
 import 'package:uuid/uuid.dart';
 
 import '../core/constants/app_constants.dart';
@@ -66,7 +67,8 @@ class StorageService {
   ///
   /// [title] 会话标题（可选，默认使用日期时间格式）
   ///
-  /// 创建 .recp 文件并初始化会话元信息，同时在全局配置数据库中保存摘要。
+  /// 创建会话目录结构（audio/photos/videos/thumbnails）和 session.db，
+  /// 同时在全局配置数据库中保存摘要。
   Future<Session> createSession({String? title}) async {
     final sessionId = _uuid.v4();
     final now = DateTime.now();
@@ -87,10 +89,10 @@ class StorageService {
       audioChannels: AppConstants.defaultChannels,
     );
 
-    // 打开会话数据库（自动创建 .recp 文件）
+    // 确保会话目录结构存在（openSession 内部会调用 ensureSessionDirs）
     final sessionDb = await openSession(sessionId);
 
-    // 保存会话元信息到 .recp 文件的 info 表
+    // 保存会话元信息到 session.db 的 info 表
     await sessionDb.saveSessionInfo(session);
 
     // 保存会话摘要到全局配置数据库
@@ -108,15 +110,15 @@ class StorageService {
 
   /// 获取会话详情
   ///
-  /// 优先从全局摘要获取基本信息，然后从 .recp 文件获取完整信息。
+  /// 优先从全局摘要获取基本信息，然后从 session.db 获取完整信息。
   Future<Session?> getSession(String sessionId) async {
-    // 先尝试从 .recp 文件获取完整信息
+    // 先尝试从 session.db 获取完整信息
     try {
       final sessionDb = await openSession(sessionId);
       final session = await sessionDb.getSessionInfo();
       if (session != null) return session;
     } catch (_) {
-      // 如果 .recp 文件打开失败，回退到摘要
+      // 如果 session.db 打开失败，回退到摘要
     }
 
     // 回退到全局摘要
@@ -130,13 +132,13 @@ class StorageService {
 
   /// 更新会话信息
   ///
-  /// 同时更新 .recp 文件和全局摘要。
+  /// 同时更新 session.db 和全局摘要。
   Future<void> updateSession(Session session) async {
     final updatedSession = session.copyWith(
       updatedAt: DateTime.now(),
     );
 
-    // 更新 .recp 文件
+    // 更新 session.db
     final sessionDb = await openSession(session.sessionId);
     await sessionDb.saveSessionInfo(updatedSession);
 
@@ -146,11 +148,13 @@ class StorageService {
 
   /// 删除会话
   ///
-  /// 删除 .recp 文件和全局摘要记录。
+  /// 删除整个会话目录（包含 session.db 和所有媒体文件）以及全局摘要记录。
   Future<void> deleteSession(String sessionId) async {
-    // 关闭并删除 .recp 文件
+    // 关闭并移除缓存
     await _closeSessionDatabase(sessionId);
-    await _dbHelper.deleteSessionDatabase(sessionId);
+
+    // 删除整个会话目录
+    await _dbHelper.deleteSessionDirectory(sessionId);
 
     // 删除全局摘要
     await _configDb.deleteSessionSummary(sessionId);
@@ -194,7 +198,7 @@ class StorageService {
 
   /// 获取存储空间统计
   ///
-  /// 遍历所有 .recp 文件计算总大小。
+  /// 遍历所有会话目录计算总大小。
   Future<StorageStats> getStorageStats() async {
     final sessionsDir = await _dbHelper.sessionsPath;
     final dir = Directory(sessionsDir);
@@ -204,9 +208,10 @@ class StorageService {
 
     if (await dir.exists()) {
       await for (final entity in dir.list()) {
-        if (entity is File && entity.path.endsWith(AppConstants.recpFileExtension)) {
+        if (entity is Directory) {
+          // 每个子目录代表一个会话
           sessionCount++;
-          totalSize += await entity.length();
+          totalSize += await _calculateDirectorySize(entity);
         }
       }
     }
@@ -277,12 +282,21 @@ class StorageService {
     int savedBytes = 0;
 
     for (final photo in photos) {
-      // 记录旧缩略图大小
-      final oldThumbnailSize = photo.thumbnail.length;
+      // 读取原图文件
+      final photoAbsPath = await sessionDb.resolvePath(photo.filePath);
+      final photoFile = File(photoAbsPath);
+      if (!await photoFile.exists()) continue;
+
+      final imageData = await photoFile.readAsBytes();
+
+      // 读取旧缩略图大小
+      final thumbAbsPath = await sessionDb.resolvePath(photo.thumbnailPath);
+      final thumbFile = File(thumbAbsPath);
+      final oldThumbnailSize = await thumbFile.exists() ? await thumbFile.length() : 0;
 
       // 使用原图重新生成更小的缩略图
       final newThumbnail = await ThumbnailUtil.generate(
-        photo.data,
+        imageData,
         maxSize: thumbnailMaxSize,
       );
 
@@ -290,10 +304,8 @@ class StorageService {
       if (newThumbnail.length < oldThumbnailSize) {
         savedBytes += oldThumbnailSize - newThumbnail.length;
 
-        // 更新数据库中的缩略图
-        final updatedPhoto = photo.copyWith(thumbnail: newThumbnail);
-        await sessionDb.deletePhoto(photo.id);
-        await sessionDb.insertPhoto(updatedPhoto);
+        // 更新缩略图文件
+        await thumbFile.writeAsBytes(newThumbnail);
       }
     }
 
@@ -302,7 +314,7 @@ class StorageService {
 
   /// 获取所有会话的详细存储统计
   ///
-  /// 遍历每个会话数据库，统计音频、照片、视频的占用空间。
+  /// 遍历每个会话目录，统计音频、照片、视频的占用空间。
   /// Author: GDNDZZK
   Future<StorageStats> getDetailedStorageStats() async {
     final sessions = await getAllSessions();
@@ -313,40 +325,29 @@ class StorageService {
 
     for (final session in sessions) {
       try {
-        final sessionDb = await openSession(session.sessionId);
+        final sessionDir = await _dbHelper.sessionDirPath(session.sessionId);
+        final dir = Directory(sessionDir);
+        if (!await dir.exists()) continue;
 
-        // 统计音频大小
-        final audioChunks = await sessionDb.getAudioChunks();
-        for (final chunk in audioChunks) {
-          audioSize += chunk.data.length;
+        // 统计各子目录大小
+        final audioDir = Directory(p.join(sessionDir, 'audio'));
+        final photosDir = Directory(p.join(sessionDir, 'photos'));
+        final videosDir = Directory(p.join(sessionDir, 'videos'));
+
+        if (await audioDir.exists()) {
+          audioSize += await _calculateDirectorySize(audioDir);
+        }
+        if (await photosDir.exists()) {
+          photosSize += await _calculateDirectorySize(photosDir);
+        }
+        if (await videosDir.exists()) {
+          videosSize += await _calculateDirectorySize(videosDir);
         }
 
-        // 统计照片大小
-        final photos = await sessionDb.getPhotos();
-        for (final photo in photos) {
-          photosSize += photo.data.length + photo.thumbnail.length;
-        }
-
-        // 统计视频大小
-        final videoChunks = await sessionDb.getVideoChunks();
-        for (final chunk in videoChunks) {
-          videosSize += chunk.data.length + (chunk.thumbnail?.length ?? 0);
-        }
+        // 加上整个会话目录的大小（包含数据库和其他文件）
+        totalSize += await _calculateDirectorySize(dir);
       } catch (_) {
         // 忽略打开失败的会话
-      }
-
-      // 加上 .recp 文件本身的大小
-      try {
-        final sessionsDir = await _dbHelper.sessionsPath;
-        final file = File(
-          '$sessionsDir/${session.sessionId}${AppConstants.recpFileExtension}',
-        );
-        if (await file.exists()) {
-          totalSize += await file.length();
-        }
-      } catch (_) {
-        // 忽略文件大小获取失败
       }
     }
 
@@ -369,6 +370,21 @@ class StorageService {
     if (sessionDb != null) {
       await _dbHelper.closeSessionDatabase(sessionId);
     }
+  }
+
+  /// 递归计算目录大小
+  Future<int> _calculateDirectorySize(Directory dir) async {
+    int size = 0;
+    try {
+      await for (final entity in dir.list(recursive: true)) {
+        if (entity is File) {
+          size += await entity.length();
+        }
+      }
+    } catch (_) {
+      // 忽略无法访问的文件
+    }
+    return size;
   }
 
   /// 格式化两位数字

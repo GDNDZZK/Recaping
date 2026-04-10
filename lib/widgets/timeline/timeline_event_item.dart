@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 
 import '../../models/timeline_event.dart';
@@ -177,6 +179,28 @@ class TimelineEventItem extends StatelessWidget {
     }
   }
 
+  /// 构建缩略图（从文件路径加载）
+  Widget _buildThumbnail(double size) {
+    if (event.thumbnailPath != null && event.thumbnailPath!.isNotEmpty) {
+      final file = File(event.thumbnailPath!);
+      return ClipRRect(
+        borderRadius: BorderRadius.circular(4),
+        child: Image.file(
+          file,
+          width: size,
+          height: size,
+          fit: BoxFit.cover,
+          errorBuilder: (_, __, ___) => SizedBox(
+            width: size,
+            height: size,
+            child: const Icon(Icons.broken_image, size: 16),
+          ),
+        ),
+      );
+    }
+    return const SizedBox.shrink();
+  }
+
   /// 照片事件内容
   Widget _buildPhotoContent(ThemeData theme, ColorScheme colorScheme) {
     final thumbnailSize = getThumbnailSize(zoomLevel);
@@ -215,12 +239,12 @@ class TimelineEventItem extends StatelessWidget {
               ),
             ],
           ),
-          if (event.thumbnail != null) ...[
+          if (event.thumbnailPath != null) ...[
             const SizedBox(height: 8),
             ClipRRect(
               borderRadius: BorderRadius.circular(6),
-              child: Image.memory(
-                event.thumbnail!,
+              child: Image.file(
+                File(event.thumbnailPath!),
                 width: thumbnailSize,
                 height: thumbnailSize,
                 fit: BoxFit.cover,
@@ -248,21 +272,8 @@ class TimelineEventItem extends StatelessWidget {
           ),
         ),
         const Spacer(),
-        if (event.thumbnail != null)
-          ClipRRect(
-            borderRadius: BorderRadius.circular(4),
-            child: Image.memory(
-              event.thumbnail!,
-              width: thumbnailSize,
-              height: thumbnailSize,
-              fit: BoxFit.cover,
-              errorBuilder: (_, __, ___) => SizedBox(
-                width: thumbnailSize,
-                height: thumbnailSize,
-                child: const Icon(Icons.broken_image, size: 16),
-              ),
-            ),
-          ),
+        if (event.thumbnailPath != null)
+          _buildThumbnail(thumbnailSize),
       ],
     );
   }
@@ -305,12 +316,12 @@ class TimelineEventItem extends StatelessWidget {
               ),
             ],
           ),
-          if (event.thumbnail != null) ...[
+          if (event.thumbnailPath != null) ...[
             const SizedBox(height: 8),
             ClipRRect(
               borderRadius: BorderRadius.circular(6),
-              child: Image.memory(
-                event.thumbnail!,
+              child: Image.file(
+                File(event.thumbnailPath!),
                 width: thumbnailSize,
                 height: thumbnailSize,
                 fit: BoxFit.cover,
@@ -338,21 +349,8 @@ class TimelineEventItem extends StatelessWidget {
           ),
         ),
         const Spacer(),
-        if (event.thumbnail != null)
-          ClipRRect(
-            borderRadius: BorderRadius.circular(4),
-            child: Image.memory(
-              event.thumbnail!,
-              width: thumbnailSize,
-              height: thumbnailSize,
-              fit: BoxFit.cover,
-              errorBuilder: (_, __, ___) => SizedBox(
-                width: thumbnailSize,
-                height: thumbnailSize,
-                child: const Icon(Icons.broken_image, size: 16),
-              ),
-            ),
-          ),
+        if (event.thumbnailPath != null)
+          _buildThumbnail(thumbnailSize),
       ],
     );
   }
@@ -465,6 +463,7 @@ class TimelineEventItem extends StatelessWidget {
     const audioColor = Color(0xFF4CAF50); // 绿色表示录音
     final durationMs = event.audioDurationMs;
     final durationStr = _formatDurationTag(durationMs);
+    final audioLabel = event.label ?? '录音';
 
     // 紧凑模式：只显示图标和标签
     if (zoomLevel == TimelineZoomLevel.compact) {
@@ -473,7 +472,7 @@ class TimelineEventItem extends StatelessWidget {
           const Icon(Icons.mic, size: 14, color: audioColor),
           const SizedBox(width: 4),
           Text(
-            '录音 $durationStr',
+            '$audioLabel $durationStr',
             style: theme.textTheme.bodySmall?.copyWith(
               fontWeight: FontWeight.w500,
               fontSize: 11,
@@ -492,7 +491,7 @@ class TimelineEventItem extends StatelessWidget {
             const Icon(Icons.mic, size: 16, color: audioColor),
             const SizedBox(width: 6),
             Text(
-              '录音',
+              audioLabel,
               style: theme.textTheme.bodySmall?.copyWith(
                 fontWeight: FontWeight.w500,
               ),

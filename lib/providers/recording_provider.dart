@@ -12,6 +12,9 @@ import '../services/recording_service.dart';
 import '../services/timeline_service.dart';
 import 'session_provider.dart';
 
+// 导出 AudioAmplitude 类型供外部使用
+export '../services/recording_service.dart' show AudioAmplitude;
+
 /// 录音服务 Provider
 ///
 /// 提供 [RecordingService] 单例，在 Provider 销毁时自动释放资源。
@@ -148,12 +151,22 @@ class TimelineEventsNotifier extends StateNotifier<List<TimelineEvent>> {
   }
 
   /// 清空事件列表并释放资源
+  ///
+  /// 安全清理：先释放资源，再检查 mounted 后更新状态。
   void clear() {
+    // 先释放资源（不依赖 mounted）
     _subscription?.cancel();
     _subscription = null;
     _timelineService = null;
-    if (mounted) {
-      state = [];
+    
+    // 仅在 Provider 仍然有效时更新状态
+    // 使用 try-catch 防止在 dispose 过程中触发断言错误
+    try {
+      if (mounted) {
+        state = [];
+      }
+    } catch (_) {
+      // 忽略 dispose 过程中的状态更新错误
     }
   }
 
@@ -266,8 +279,11 @@ class RecordingControlNotifier extends StateNotifier<AsyncValue<void>> {
   /// 停止录音会话
   ///
   /// 保存最后一个音频分片，更新会话信息，清理时间轴服务。
+  /// 使用 [mounted] 检查确保 Provider 仍然有效时才更新状态。
   Future<void> stopSession() async {
     try {
+      // 检查 Provider 是否仍然有效
+      if (!mounted) return;
       state = const AsyncValue.loading();
 
       final recordingService = _ref.read(recordingServiceProvider);
@@ -276,11 +292,16 @@ class RecordingControlNotifier extends StateNotifier<AsyncValue<void>> {
       // 停止录音
       await recordingService.stopSession();
 
+      // 检查 Provider 是否仍然有效（异步操作后）
+      if (!mounted) return;
+
       // 更新会话信息（时长等）
       if (sessionId != null) {
         try {
           final storageService = await _ref.read(storageServiceProvider.future);
+          if (!mounted) return; // 检查 Provider 是否仍然有效
           final session = await storageService.getSession(sessionId);
+          if (!mounted) return; // 检查 Provider 是否仍然有效
           if (session != null) {
             await storageService.updateSession(
               session.copyWith(
@@ -294,12 +315,21 @@ class RecordingControlNotifier extends StateNotifier<AsyncValue<void>> {
         }
       }
 
-      // 清理时间轴事件
+      // 清理时间轴事件（检查 Provider 是否仍然有效）
+      if (!mounted) return;
       _ref.read(timelineEventsProvider.notifier).clear();
 
+      // 刷新会话列表，确保首页能立即显示新录音
+      if (!mounted) return;
+      _ref.read(sessionListProvider.notifier).loadSessions();
+
+      if (!mounted) return;
       state = const AsyncValue.data(null);
     } catch (e, st) {
-      state = AsyncValue.error(e, st);
+      // 错误状态更新也需要检查 mounted
+      if (mounted) {
+        state = AsyncValue.error(e, st);
+      }
     }
   }
 

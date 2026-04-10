@@ -1,5 +1,8 @@
 import 'dart:io';
+import 'dart:typed_data';
 
+import 'package:archive/archive.dart';
+import 'package:archive/archive_io.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -13,40 +16,41 @@ import '../models/session.dart';
 /// 导出导入服务
 ///
 /// 管理会话的导出、导入和分享功能。
-/// 支持将 .recp 文件导出到外部存储、通过系统分享面板分享、
-/// 以及从外部文件导入会话。
+/// 导出格式为 ZIP 文件（.recp），包含整个会话目录。
+/// 导入时解压 ZIP 文件到 sessions 目录。
 /// Author: GDNDZZK
 class ExportService {
   final DatabaseHelper _dbHelper;
 
   ExportService(this._dbHelper);
 
-  /// 导出会话为 .recp 文件
+  /// 导出会话为 .recp 文件（ZIP 格式）
   ///
   /// [sessionId] 要导出的会话 ID
   ///
-  /// 将 .recp 文件复制到临时目录，返回导出文件路径。
+  /// 将整个会话目录打包为 ZIP 文件，复制到临时目录，返回导出文件路径。
   Future<String> exportSession(String sessionId) async {
-    // 1. 获取源 .recp 文件路径
-    final sessionsPath = await _dbHelper.sessionsPath;
-    final sourcePath = p.join(
-      sessionsPath,
-      '$sessionId${AppConstants.recpFileExtension}',
-    );
-
-    // 2. 检查文件是否存在
-    final sourceFile = File(sourcePath);
-    if (!await sourceFile.exists()) {
-      throw Exception('会话文件不存在: $sessionId');
+    // 1. 获取会话目录路径
+    final sessionDir = await _dbHelper.sessionDirPath(sessionId);
+    final dir = Directory(sessionDir);
+    if (!await dir.exists()) {
+      throw Exception('会话目录不存在: $sessionId');
     }
 
-    // 3. 复制到临时目录
+    // 2. 创建 ZIP 归档
+    final archive = Archive();
+    await _addDirectoryToArchive(archive, dir, sessionId);
+
+    // 3. 编码为 ZIP 数据
+    final zipData = Uint8List.fromList(ZipEncoder().encode(archive)!);
+
+    // 4. 写入临时目录
     final exportDir = await getTemporaryDirectory();
     final exportPath = p.join(
       exportDir.path,
       '$sessionId${AppConstants.recpFileExtension}',
     );
-    await sourceFile.copy(exportPath);
+    await File(exportPath).writeAsBytes(zipData, flush: true);
 
     return exportPath;
   }
@@ -85,7 +89,7 @@ class ExportService {
 
   /// 从文件导入会话
   ///
-  /// 打开文件选择器，选择 .recp 文件，验证格式后复制到 sessions 目录。
+  /// 打开文件选择器，选择 .recp 文件（ZIP 格式），解压到 sessions 目录。
   /// 返回导入的会话 ID。
   Future<String> importSession() async {
     // 1. 打开文件选择器
@@ -103,96 +107,89 @@ class ExportService {
       throw Exception('文件路径为空');
     }
 
-    // 2. 验证文件格式（检查是否为有效 SQLite）
+    // 2. 验证文件格式（检查是否为有效 ZIP）
     final file = File(filePath);
     final bytes = await file.readAsBytes();
-    if (bytes.length < 16) {
+    if (bytes.length < 4) {
       throw Exception('文件太小，不是有效的 .recp 文件');
     }
-    // SQLite 文件头为 "SQLite format 3\000"
-    final header = String.fromCharCodes(bytes.sublist(0, 15));
-    if (!header.startsWith('SQLite format 3')) {
-      throw Exception('无效的 .recp 文件格式');
+    // ZIP 文件头为 PK\x03\x04 (0x50 0x4B 0x03 0x04)
+    if (bytes[0] != 0x50 || bytes[1] != 0x4B) {
+      throw Exception('无效的 .recp 文件格式（不是有效的 ZIP 文件）');
     }
 
-    // 3. 从文件名提取 session ID
-    final fileName = p.basenameWithoutExtension(filePath);
-    final sessionId = fileName;
+    // 3. 解压 ZIP 文件
+    final archive = ZipDecoder().decodeBytes(bytes);
 
-    // 4. 验证数据库结构（尝试打开并读取 info 表）
-    Database? tempDb;
+    // 从 ZIP 内的路径提取 session ID（第一级目录名）
+    String? sessionId;
+    for (final archiveFile in archive) {
+      final parts = archiveFile.name.split('/');
+      if (parts.isNotEmpty && parts.first.isNotEmpty) {
+        sessionId = parts.first;
+        break;
+      }
+    }
+
+    if (sessionId == null || sessionId.isEmpty) {
+      throw Exception('无法从文件中提取会话 ID');
+    }
+
+    // 4. 检查是否已存在
+    final sessionDir = await _dbHelper.sessionDirPath(sessionId);
+    if (await Directory(sessionDir).exists()) {
+      throw Exception('会话已存在: $sessionId');
+    }
+
+    // 5. 解压到 sessions 目录
+    final sessionsPath = await _dbHelper.sessionsPath;
+    for (final archiveFile in archive) {
+      final outputPath = p.join(sessionsPath, archiveFile.name);
+      if (archiveFile.isFile) {
+        // 确保目录存在
+        await Directory(p.dirname(outputPath)).create(recursive: true);
+        await File(outputPath).writeAsBytes(archiveFile.content as List<int>);
+      } else {
+        await Directory(outputPath).create(recursive: true);
+      }
+    }
+
+    // 6. 验证解压后的数据库结构
     try {
-      // 复制到临时位置进行验证
-      final tempDir = await getTemporaryDirectory();
-      final tempPath = p.join(
-        tempDir.path,
-        'import_verify_$sessionId${AppConstants.recpFileExtension}',
-      );
-      await file.copy(tempPath);
-
-      // 尝试打开数据库并读取会话信息
-      tempDb = await openDatabase(
-        tempPath,
-        version: 1,
-        onConfigure: (db) async {
-          await db.execute('PRAGMA foreign_keys = ON');
-        },
-      );
+      final db = await _dbHelper.openSessionDatabase(sessionId);
 
       // 检查是否有 info 表
-      final tables = await tempDb.rawQuery(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='info'",
+      final tables = await db.query(
+        'sqlite_master',
+        where: "type = 'table' AND name = 'info'",
       );
       if (tables.isEmpty) {
+        // 清理无效导入
+        await _dbHelper.deleteSessionDirectory(sessionId);
         throw Exception('文件中未找到有效的会话数据（缺少 info 表）');
       }
 
       // 检查是否有 session_id
-      final infoResults = await tempDb.query(
+      final infoResults = await db.query(
         'info',
         where: 'key = ?',
         whereArgs: ['session_id'],
       );
       if (infoResults.isEmpty) {
+        await _dbHelper.deleteSessionDirectory(sessionId);
         throw Exception('文件中未找到有效的会话信息');
       }
-
-      // 关闭临时数据库
-      await tempDb.close();
-      tempDb = null;
-
-      // 清理临时文件
-      final tempFile = File(tempPath);
-      if (await tempFile.exists()) {
-        await tempFile.delete();
-      }
     } catch (e) {
-      // 关闭临时数据库
-      if (tempDb != null && tempDb.isOpen) {
-        await tempDb.close();
-      }
       // 如果是自定义异常，重新抛出
       if (e.toString().contains('未找到有效的会话')) {
         rethrow;
       }
+      // 清理无效导入
+      await _dbHelper.deleteSessionDirectory(sessionId);
       throw Exception('无法读取会话数据: $e');
     }
 
-    // 5. 复制到 sessions 目录
-    final sessionsPath = await _dbHelper.sessionsPath;
-    final destPath = p.join(
-      sessionsPath,
-      '$sessionId${AppConstants.recpFileExtension}',
-    );
-
-    // 检查是否已存在
-    if (await File(destPath).exists()) {
-      throw Exception('会话已存在: $sessionId');
-    }
-
-    await file.copy(destPath);
-
-    // 6. 从导入的数据库中读取会话信息，保存到全局摘要
+    // 7. 从导入的数据库中读取会话信息，保存到全局摘要
     try {
       final db = await _dbHelper.openSessionDatabase(sessionId);
 
@@ -228,6 +225,31 @@ class ExportService {
     }
 
     return sessionId;
+  }
+
+  /// 递归添加目录内容到归档
+  Future<void> _addDirectoryToArchive(
+    Archive archive,
+    Directory dir,
+    String basePath,
+  ) async {
+    await for (final entity in dir.list()) {
+      if (entity is File) {
+        final relativePath = p.join(
+          basePath,
+          entity.path.substring(dir.path.length + 1),
+        );
+        final data = await entity.readAsBytes();
+        archive.addFile(ArchiveFile(relativePath, data.length, data));
+      } else if (entity is Directory) {
+        final dirName = p.basename(entity.path);
+        await _addDirectoryToArchive(
+          archive,
+          entity,
+          p.join(basePath, dirName),
+        );
+      }
+    }
   }
 
   /// 清理文件名中的非法字符

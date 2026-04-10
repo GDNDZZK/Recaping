@@ -1,5 +1,7 @@
+import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:path/path.dart' as p;
 import 'package:uuid/uuid.dart';
 
 import '../core/constants/app_constants.dart';
@@ -15,6 +17,7 @@ import '../models/video_chunk.dart';
 ///
 /// 管理时间轴上的所有事件（拍照、笔记、书签等）。
 /// 需要关联到当前活跃的录音会话，所有事件使用相对于会话开始时间的毫秒偏移量。
+/// 媒体数据（照片、视频）存储在文件系统中，数据库只保存路径引用。
 /// Author: GDNDZZK
 class TimelineService {
   final SessionDatabase _db;
@@ -55,7 +58,7 @@ class TimelineService {
   /// [width] 图片宽度（像素）
   /// [height] 图片高度（像素）
   ///
-  /// 自动生成缩略图并存入数据库。
+  /// 将照片数据写入文件系统，生成缩略图，数据库存路径引用。
   Future<Photo> addPhoto(
     Uint8List imageData, {
     int? width,
@@ -64,18 +67,35 @@ class TimelineService {
     _ensureSessionActive();
 
     final timestamp = _currentTimestamp;
+    final photoId = _uuid.v4();
 
-    // 生成缩略图
-    final thumbnail = await ThumbnailUtil.generate(
+    // 相对路径
+    final photoRelativePath = 'photos/$photoId.jpeg';
+    final thumbRelativePath = 'thumbnails/${photoId}_thumb.jpeg';
+
+    // 绝对路径
+    final photoAbsPath = await _db.resolvePath(photoRelativePath);
+    final thumbAbsPath = await _db.resolvePath(thumbRelativePath);
+
+    // 确保目录存在
+    await Directory(p.dirname(photoAbsPath)).create(recursive: true);
+    await Directory(p.dirname(thumbAbsPath)).create(recursive: true);
+
+    // 写入原始照片文件
+    await File(photoAbsPath).writeAsBytes(imageData, flush: true);
+
+    // 生成缩略图并写入文件
+    final thumbnailData = await ThumbnailUtil.generate(
       imageData,
       maxSize: AppConstants.thumbnailMaxSize,
     );
+    await File(thumbAbsPath).writeAsBytes(thumbnailData, flush: true);
 
     final photo = Photo(
-      id: _uuid.v4(),
+      id: photoId,
       timestamp: timestamp,
-      data: imageData,
-      thumbnail: thumbnail,
+      filePath: photoRelativePath,
+      thumbnailPath: thumbRelativePath,
       format: AppConstants.defaultPhotoFormat,
       width: width ?? 0,
       height: height ?? 0,
@@ -92,9 +112,8 @@ class TimelineService {
   /// [videoData] 完整视频数据
   /// [format] 视频格式（默认 mp4）
   ///
-  /// 由于 Flutter 中无法精确分割视频流为 5 秒段，
+  /// 将视频数据写入文件系统，数据库存路径引用。
   /// 简化处理：将整个视频作为一个 VideoChunk 存储（chunk_index=0）。
-  /// 后续可以优化为真正的分段。
   Future<VideoChunk> addVideo(
     Uint8List videoData, {
     String format = 'mp4',
@@ -103,16 +122,29 @@ class TimelineService {
 
     final timestamp = _currentTimestamp;
     final videoId = _uuid.v4();
+    final chunkId = _uuid.v4();
+
+    // 相对路径
+    final videoRelativePath = 'videos/$videoId.mp4';
+
+    // 绝对路径
+    final videoAbsPath = await _db.resolvePath(videoRelativePath);
+
+    // 确保目录存在
+    await Directory(p.dirname(videoAbsPath)).create(recursive: true);
+
+    // 写入视频文件
+    await File(videoAbsPath).writeAsBytes(videoData, flush: true);
 
     final chunk = VideoChunk(
-      id: _uuid.v4(),
+      id: chunkId,
       videoId: videoId,
       chunkIndex: 0,
       startTime: timestamp,
       endTime: timestamp + AppConstants.videoChunkDurationMs,
-      data: videoData,
+      filePath: videoRelativePath,
       format: format,
-      thumbnail: null, // 视频缩略图生成较复杂，暂不实现
+      thumbnailPath: null, // 视频缩略图生成较复杂，暂不实现
     );
 
     await _db.insertVideoChunk(chunk);
@@ -205,6 +237,18 @@ class TimelineService {
   Future<void> deleteEvent(String eventId, TimelineEventType type) async {
     switch (type) {
       case TimelineEventType.photo:
+        // 删除照片和缩略图文件
+        final photo = await _db.getPhotoById(eventId);
+        if (photo != null) {
+          final photoFile = File(await _db.resolvePath(photo.filePath));
+          final thumbFile = File(await _db.resolvePath(photo.thumbnailPath));
+          try {
+            if (await photoFile.exists()) await photoFile.delete();
+          } catch (_) {}
+          try {
+            if (await thumbFile.exists()) await thumbFile.delete();
+          } catch (_) {}
+        }
         await _db.deletePhoto(eventId);
       case TimelineEventType.video:
         // 视频删除需要通过 videoId，这里按单个分片 ID 删除

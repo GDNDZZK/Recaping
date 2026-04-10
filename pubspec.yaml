@@ -41,8 +41,14 @@ dependencies:
   # 文件分享
   share_plus: ^7.2.1
 
+  # 系统文件打开
+  open_filex: ^4.5.0
+
   # 文件选择（用于导入）
   file_picker: any
+
+  # ZIP 压缩/解压（用于导出/导入 .recp 文件）
+  archive: ^3.4.10
 
   # 工具
   uuid: ^4.3.3

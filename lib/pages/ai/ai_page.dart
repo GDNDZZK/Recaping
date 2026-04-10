@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -211,7 +213,11 @@ class _AiPageState extends ConsumerState<AiPage> {
 
       final allBytes = <int>[];
       for (final chunk in chunks) {
-        allBytes.addAll(chunk.data);
+        final absPath = await sessionDb.resolvePath(chunk.filePath);
+        final file = File(absPath);
+        if (await file.exists()) {
+          allBytes.addAll(await file.readAsBytes());
+        }
       }
       return allBytes.isNotEmpty ? Uint8List.fromList(allBytes) : null;
     } catch (_) {
@@ -319,7 +325,13 @@ class _AiPageState extends ConsumerState<AiPage> {
       appBar: AppBar(
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
-          onPressed: () => context.pop(),
+          onPressed: () {
+            if (context.canPop()) {
+              context.pop();
+            } else {
+              context.go('/');
+            }
+          },
         ),
         title: const Text('AI 功能'),
         backgroundColor: colorScheme.surface,

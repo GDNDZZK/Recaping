@@ -49,8 +49,13 @@ class _RecordingTimelineState extends State<RecordingTimeline> {
   }
 
   /// 滚动到底部（最新事件）
+  ///
+  /// 使用 mounted 检查确保 Widget 仍然有效时才执行滚动动画。
   void _scrollToBottom() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      // 检查 Widget 是否仍然有效
+      if (!mounted) return;
+      
       final controller = widget.scrollController ?? _internalController;
       if (controller != null && controller.hasClients) {
         controller.animateTo(

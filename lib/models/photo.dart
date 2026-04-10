@@ -1,9 +1,7 @@
-import 'dart:typed_data';
-
 /// 照片模型
 ///
-/// 代表录音过程中拍摄的照片，包含原始数据和缩略图。
-/// 照片数据以 BLOB 形式存储在数据库中。
+/// 代表录音过程中拍摄的照片。
+/// 照片数据和缩略图存储在文件系统中，数据库只保存文件路径引用。
 /// Author: GDNDZZK
 class Photo {
   /// 照片唯一标识（UUID）
@@ -12,11 +10,11 @@ class Photo {
   /// 拍摄时间（相对于会话开始的毫秒偏移）
   final int timestamp;
 
-  /// 照片原始数据
-  final Uint8List data;
+  /// 照片文件相对路径（相对于会话目录，如 photos/{id}.jpeg）
+  final String filePath;
 
-  /// 缩略图数据
-  final Uint8List thumbnail;
+  /// 缩略图文件相对路径（相对于会话目录，如 thumbnails/{id}_thumb.jpeg）
+  final String thumbnailPath;
 
   /// 图片格式（如 jpeg）
   final String format;
@@ -30,8 +28,8 @@ class Photo {
   const Photo({
     required this.id,
     required this.timestamp,
-    required this.data,
-    required this.thumbnail,
+    required this.filePath,
+    required this.thumbnailPath,
     this.format = 'jpeg',
     this.width = 0,
     this.height = 0,
@@ -42,8 +40,8 @@ class Photo {
     return Photo(
       id: map['id'] as String,
       timestamp: map['timestamp'] as int,
-      data: map['data'] as Uint8List,
-      thumbnail: map['thumbnail'] as Uint8List,
+      filePath: map['file_path'] as String,
+      thumbnailPath: map['thumbnail_path'] as String,
       format: map['format'] as String? ?? 'jpeg',
       width: map['width'] as int? ?? 0,
       height: map['height'] as int? ?? 0,
@@ -55,8 +53,8 @@ class Photo {
     return {
       'id': id,
       'timestamp': timestamp,
-      'data': data,
-      'thumbnail': thumbnail,
+      'file_path': filePath,
+      'thumbnail_path': thumbnailPath,
       'format': format,
       'width': width,
       'height': height,
@@ -67,8 +65,8 @@ class Photo {
   Photo copyWith({
     String? id,
     int? timestamp,
-    Uint8List? data,
-    Uint8List? thumbnail,
+    String? filePath,
+    String? thumbnailPath,
     String? format,
     int? width,
     int? height,
@@ -76,8 +74,8 @@ class Photo {
     return Photo(
       id: id ?? this.id,
       timestamp: timestamp ?? this.timestamp,
-      data: data ?? this.data,
-      thumbnail: thumbnail ?? this.thumbnail,
+      filePath: filePath ?? this.filePath,
+      thumbnailPath: thumbnailPath ?? this.thumbnailPath,
       format: format ?? this.format,
       width: width ?? this.width,
       height: height ?? this.height,
@@ -89,6 +87,7 @@ class Photo {
     return 'Photo('
         'id: $id, '
         'timestamp: $timestamp, '
+        'filePath: $filePath, '
         'format: $format, '
         'width: $width, '
         'height: $height'

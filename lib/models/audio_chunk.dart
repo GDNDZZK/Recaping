@@ -1,9 +1,7 @@
-import 'dart:typed_data';
-
 /// 音频分片模型
 ///
 /// 代表录音过程中的一段音频数据，默认每 15 秒为一个分片。
-/// 音频数据以 BLOB 形式直接存储在数据库中。
+/// 音频数据存储在文件系统中，数据库只保存文件路径引用。
 /// Author: GDNDZZK
 class AudioChunk {
   /// 分片唯一标识（UUID）
@@ -18,8 +16,8 @@ class AudioChunk {
   /// 结束时间（相对于会话开始的毫秒偏移）
   final int endTime;
 
-  /// 音频数据
-  final Uint8List data;
+  /// 音频文件相对路径（相对于会话目录，如 audio/chunk_0.aac）
+  final String filePath;
 
   /// 音频格式（如 aac）
   final String format;
@@ -35,7 +33,7 @@ class AudioChunk {
     required this.chunkIndex,
     required this.startTime,
     required this.endTime,
-    required this.data,
+    required this.filePath,
     this.format = 'aac',
     this.sampleRate = 44100,
     this.channels = 1,
@@ -48,7 +46,7 @@ class AudioChunk {
       chunkIndex: map['chunk_index'] as int,
       startTime: map['start_time'] as int,
       endTime: map['end_time'] as int,
-      data: map['data'] as Uint8List,
+      filePath: map['file_path'] as String,
       format: map['format'] as String? ?? 'aac',
       sampleRate: map['sample_rate'] as int? ?? 44100,
       channels: map['channels'] as int? ?? 1,
@@ -62,7 +60,7 @@ class AudioChunk {
       'chunk_index': chunkIndex,
       'start_time': startTime,
       'end_time': endTime,
-      'data': data,
+      'file_path': filePath,
       'format': format,
       'sample_rate': sampleRate,
       'channels': channels,
@@ -75,7 +73,7 @@ class AudioChunk {
     int? chunkIndex,
     int? startTime,
     int? endTime,
-    Uint8List? data,
+    String? filePath,
     String? format,
     int? sampleRate,
     int? channels,
@@ -85,7 +83,7 @@ class AudioChunk {
       chunkIndex: chunkIndex ?? this.chunkIndex,
       startTime: startTime ?? this.startTime,
       endTime: endTime ?? this.endTime,
-      data: data ?? this.data,
+      filePath: filePath ?? this.filePath,
       format: format ?? this.format,
       sampleRate: sampleRate ?? this.sampleRate,
       channels: channels ?? this.channels,
@@ -102,6 +100,7 @@ class AudioChunk {
         'chunkIndex: $chunkIndex, '
         'startTime: $startTime, '
         'endTime: $endTime, '
+        'filePath: $filePath, '
         'format: $format'
         ')';
   }

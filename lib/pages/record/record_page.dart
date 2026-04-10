@@ -826,7 +826,7 @@ class _RecordPageState extends ConsumerState<RecordPage>
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('结束本次录音？'),
-        content: const Text('确定结束本次录音？结束后将保存录音并跳转到回放页面。'),
+        content: const Text('确定结束本次录音？结束后将保存录音并返回首页。'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
@@ -835,14 +835,11 @@ class _RecordPageState extends ConsumerState<RecordPage>
           FilledButton(
             onPressed: () async {
               Navigator.pop(context);
+              // 停止会话并保存录音
               await ref.read(recordingControlProvider.notifier).stopSession();
               if (mounted) {
-                final sessionId = ref.read(currentSessionIdProvider);
-                if (sessionId != null) {
-                  this.context.go('/playback/$sessionId');
-                } else {
-                  this.context.go('/');
-                }
+                // 保存后返回首页
+                this.context.go('/');
               }
             },
             child: const Text('确认'),

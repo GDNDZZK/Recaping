@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:just_audio/just_audio.dart';
 import 'package:path_provider/path_provider.dart';
@@ -30,7 +29,7 @@ enum PlaybackState {
 
 /// 音频回放服务
 ///
-/// 从数据库读取所有音频分片，合并后使用 [AudioPlayer] 播放。
+/// 从文件系统读取所有音频分片，合并后使用 [AudioPlayer] 播放。
 /// 支持播放/暂停/跳转/变速等操作。
 /// Author: GDNDZZK
 class AudioPlaybackService {
@@ -81,7 +80,7 @@ class AudioPlaybackService {
 
   /// 加载会话音频
   ///
-  /// 从数据库加载所有 [AudioChunk]，按 [chunkIndex] 排序，
+  /// 从数据库加载所有 [AudioChunk] 的路径引用，从文件系统读取音频数据，
   /// 合并为一个临时文件后加载到播放器。
   Future<void> loadSession(
     String sessionId,
@@ -91,7 +90,7 @@ class AudioPlaybackService {
     _currentSessionId = sessionId;
 
     try {
-      // 从数据库加载所有音频分片
+      // 从数据库加载所有音频分片的元数据
       _chunks = await db.getAudioChunks();
 
       if (_chunks.isEmpty) {
@@ -99,8 +98,8 @@ class AudioPlaybackService {
         return;
       }
 
-      // 将所有分片数据合并为一个完整的音频文件
-      final mergedData = _mergeChunks(_chunks);
+      // 从文件系统读取所有分片数据并合并
+      final mergedData = await _mergeChunks(_chunks, db);
 
       // 写入临时文件
       final tempFile = await _writeTempAudioFile(sessionId, mergedData);
@@ -237,21 +236,27 @@ class AudioPlaybackService {
     });
   }
 
-  /// 合并所有音频分片数据
-  Uint8List _mergeChunks(List<AudioChunk> chunks) {
-    // 合并数据
-    final mergedData = BytesBuilder();
+  /// 从文件系统读取所有音频分片数据并合并
+  Future<List<int>> _mergeChunks(
+    List<AudioChunk> chunks,
+    SessionDatabase db,
+  ) async {
+    final mergedData = <int>[];
     for (final chunk in chunks) {
-      mergedData.add(chunk.data);
+      final absPath = await db.resolvePath(chunk.filePath);
+      final file = File(absPath);
+      if (await file.exists()) {
+        final data = await file.readAsBytes();
+        mergedData.addAll(data);
+      }
     }
-
-    return mergedData.toBytes();
+    return mergedData;
   }
 
   /// 将音频数据写入临时文件
   Future<File> _writeTempAudioFile(
     String sessionId,
-    Uint8List audioData,
+    List<int> audioData,
   ) async {
     final tempDir = await getTemporaryDirectory();
     final filePath = p.join(tempDir.path, 'playback_$sessionId.m4a');

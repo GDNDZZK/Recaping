@@ -623,17 +623,21 @@ class _RecordPageState extends ConsumerState<RecordPage>
                   const SizedBox(width: 8),
                   FilledButton(
                     onPressed: () {
+                      // 先获取所有需要的值
                       final content = contentController.text.trim();
+                      final title = titleController.text.trim().isEmpty
+                          ? null
+                          : titleController.text.trim();
+
                       if (content.isEmpty) return;
+
+                      // 再关闭 Sheet
                       Navigator.pop(context);
+
+                      // 使用已获取的值
                       ref
                           .read(recordingControlProvider.notifier)
-                          .addTextNote(
-                            content,
-                            title: titleController.text.trim().isEmpty
-                                ? null
-                                : titleController.text.trim(),
-                          );
+                          .addTextNote(content, title: title);
                     },
                     child: const Text('确认'),
                   ),
@@ -643,10 +647,7 @@ class _RecordPageState extends ConsumerState<RecordPage>
           ),
         );
       },
-    ).then((_) {
-      contentController.dispose();
-      titleController.dispose();
-    });
+    );
   }
 
   /// 显示书签添加底部 Sheet
@@ -774,13 +775,19 @@ class _RecordPageState extends ConsumerState<RecordPage>
                       const SizedBox(width: 8),
                       FilledButton(
                         onPressed: () {
+                          // 先获取所有需要的值
+                          final label = labelController.text.trim().isEmpty
+                              ? null
+                              : labelController.text.trim();
+
+                          // 再关闭 Sheet
                           Navigator.pop(context);
+
+                          // 使用已获取的值
                           ref
                               .read(recordingControlProvider.notifier)
                               .addBookmark(
-                                label: labelController.text.trim().isEmpty
-                                    ? null
-                                    : labelController.text.trim(),
+                                label: label,
                                 color: selectedColor,
                               );
                         },
@@ -794,9 +801,7 @@ class _RecordPageState extends ConsumerState<RecordPage>
           },
         );
       },
-    ).then((_) {
-      labelController.dispose();
-    });
+    );
   }
 
   /// 显示放弃录音确认对话框

@@ -91,6 +91,7 @@ class _RecordPageState extends ConsumerState<RecordPage>
     final audioMsAsync = ref.watch(audioElapsedMsProvider);
     final events = ref.watch(timelineEventsProvider);
     final controlState = ref.watch(recordingControlProvider);
+    final amplitudeAsync = ref.watch(amplitudeProvider);
 
     final totalMs = totalMsAsync.valueOrNull ?? 0;
     final audioMs = audioMsAsync.valueOrNull ?? 0;
@@ -98,6 +99,9 @@ class _RecordPageState extends ConsumerState<RecordPage>
     final isPaused = recordingState == RecordingState.paused;
     final isTotalPaused = recordingState == RecordingState.totalPaused;
     final isActive = isRecording || isPaused || isTotalPaused;
+    
+    // 获取振幅高度（0.0 ~ 1.0）
+    final amplitude = amplitudeAsync.valueOrNull?.toNormalizedHeight() ?? 0.0;
 
     // 监听控制状态错误
     ref.listen<AsyncValue<void>>(recordingControlProvider, (_, next) {
@@ -132,6 +136,7 @@ class _RecordPageState extends ConsumerState<RecordPage>
               isPaused: isPaused,
               isTotalPaused: isTotalPaused,
               isLoading: controlState.isLoading,
+              amplitude: amplitude,
             ),
 
             // 分隔线
@@ -212,6 +217,7 @@ class _RecordPageState extends ConsumerState<RecordPage>
     required bool isPaused,
     required bool isTotalPaused,
     required bool isLoading,
+    required double amplitude,
   }) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
@@ -281,6 +287,7 @@ class _RecordPageState extends ConsumerState<RecordPage>
             color: isRecording
                 ? const Color(0xFFFF4444)
                 : colorScheme.primary.withValues(alpha: 0.3),
+            amplitude: amplitude,
           ),
         ],
       ),

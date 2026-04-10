@@ -87,6 +87,23 @@ final isTotalTimelinePausedProvider = Provider<bool>((ref) {
   return stateAsync.valueOrNull == RecordingState.totalPaused;
 });
 
+/// 音频振幅 Provider
+///
+/// 监听 [RecordingService.onAmplitude] 流，返回最新的音频振幅数据。
+/// 仅在录音状态下有数据，暂停或停止时返回 null。
+/// Author: GDNDZZK
+final amplitudeProvider = StreamProvider<AudioAmplitude?>((ref) {
+  final service = ref.watch(recordingServiceProvider);
+  final stateAsync = ref.watch(recordingStateProvider);
+  
+  // 仅在录音状态下监听振幅
+  if (stateAsync.valueOrNull != RecordingState.recording) {
+    return Stream.value(null);
+  }
+  
+  return service.onAmplitude;
+});
+
 /// 时间轴事件列表 Notifier
 ///
 /// 管理当前录音会话的时间轴事件列表，提供添加/删除/刷新操作。

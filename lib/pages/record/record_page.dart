@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../core/utils/date_format_util.dart';
 import '../../models/recording_segment.dart';
 import '../../providers/recording_provider.dart';
+import '../../providers/session_provider.dart';
 import '../../services/recording_service.dart';
 import '../../widgets/recording_controls/recording_controls.dart';
 import '../../widgets/recording_controls/waveform_indicator.dart';
@@ -43,6 +44,9 @@ class _RecordPageState extends ConsumerState<RecordPage>
   /// 是否已初始化会话
   bool _sessionInitialized = false;
 
+  /// ref.listenManual 返回的监听器订阅（用于 dispose 时关闭）
+  ProviderSubscription<AsyncValue<void>>? _controlStateSubscription;
+
   @override
   void initState() {
     super.initState();
@@ -63,10 +67,29 @@ class _RecordPageState extends ConsumerState<RecordPage>
         _startNewSession();
       });
     }
+
+    // 监听控制状态错误（使用 listenManual 在 initState 中注册，避免 build 中高频重建导致依赖追踪异常）
+    _controlStateSubscription = ref.listenManual<AsyncValue<void>>(
+      recordingControlProvider,
+      (previous, next) {
+        if (next.hasError && !next.isLoading) {
+          if (context.mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('操作失败: ${next.error}'),
+                backgroundColor: Colors.red,
+              ),
+            );
+          }
+        }
+      },
+      fireImmediately: false,
+    );
   }
 
   @override
   void dispose() {
+    _controlStateSubscription?.close();
     _pulseController.dispose();
     _titleController.dispose();
     super.dispose();
@@ -115,18 +138,6 @@ class _RecordPageState extends ConsumerState<RecordPage>
 
     // 获取振幅高度（0.0 ~ 1.0）
     final amplitude = amplitudeAsync.valueOrNull?.toNormalizedHeight() ?? 0.0;
-
-    // 监听控制状态错误
-    ref.listen<AsyncValue<void>>(recordingControlProvider, (_, next) {
-      if (next.hasError && !next.isLoading) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('操作失败: ${next.error}'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    });
 
     return PopScope(
       canPop: !isActive,
@@ -830,7 +841,9 @@ class _RecordPageState extends ConsumerState<RecordPage>
         content: const Text('当前录音内容将不会被保存，确定要放弃吗？'),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () {
+              Navigator.pop(context);
+            },
             child: const Text('继续录音'),
           ),
           FilledButton(
@@ -861,7 +874,9 @@ class _RecordPageState extends ConsumerState<RecordPage>
         content: const Text('确定结束本次录音？结束后将保存录音并返回首页。'),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () {
+              Navigator.pop(context);
+            },
             child: const Text('取消'),
           ),
           FilledButton(
@@ -882,46 +897,60 @@ class _RecordPageState extends ConsumerState<RecordPage>
   }
 
   /// 显示编辑标题对话框
+  ///
+  /// 使用 [Overlay] 替代 [showDialog]，避免 push 新路由导致 InheritedWidget
+  /// 依赖追踪异常（_dependents.isEmpty 断言错误）。
   void _showEditTitleDialog() {
-    final editController = TextEditingController(
-      text: _titleController.text.isEmpty ? '新建录音' : _titleController.text,
-    );
+    if (!mounted) return;
 
-    showDialog(
+    final currentName =
+        _titleController.text.isEmpty ? '新建录音' : _titleController.text;
+
+    _EditTitleOverlay.show(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('编辑标题'),
-        content: TextField(
-          controller: editController,
-          decoration: const InputDecoration(
-            labelText: '会话标题',
-            border: OutlineInputBorder(),
-          ),
-          autofocus: true,
-          maxLength: 50,
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () {
-              final title = editController.text.trim();
-              if (title.isNotEmpty) {
-                setState(() {
-                  _titleController.text = title;
-                });
-              }
-              Navigator.pop(context);
-            },
-            child: const Text('确认'),
-          ),
-        ],
-      ),
-    ).then((_) {
-      editController.dispose();
-    });
+      currentTitle: currentName,
+      onConfirmed: (newName) async {
+        if (!mounted) return;
+        
+        // 先更新本地 UI
+        setState(() {
+          _titleController.text = newName;
+        });
+        
+        // 保存到数据库
+        try {
+          final recordingService = ref.read(recordingServiceProvider);
+          final sessionId = recordingService.currentSessionId;
+          
+          if (sessionId != null) {
+            final storageService = await ref.read(storageServiceProvider.future);
+            final session = await storageService.getSession(sessionId);
+            
+            if (session != null && mounted) {
+              await storageService.updateSession(
+                session.copyWith(
+                  title: newName,
+                  updatedAt: DateTime.now(),
+                ),
+              );
+            }
+          }
+        } catch (e) {
+          // 保存失败时不影响本地 UI 更新
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('保存标题失败：$e'),
+                backgroundColor: Colors.red,
+              ),
+            );
+          }
+        }
+      },
+      onDismissed: () {
+        // Overlay 已关闭，无需额外操作
+      },
+    );
   }
 
   // ==================== 工具方法 ====================
@@ -943,6 +972,146 @@ class _RecordPageState extends ConsumerState<RecordPage>
       return Color(int.parse('FF$hex', radix: 16));
     } catch (_) {
       return const Color(0xFFFF6B6B);
+    }
+  }
+}
+
+/// 编辑录音名称 Overlay
+///
+/// 使用 [Overlay.insert] 在当前路由上叠加对话框，避免 push 新路由
+/// 导致的 InheritedWidget 依赖追踪异常（_dependents.isEmpty 断言错误）。
+///
+/// Author: GDNDZZK
+class _EditTitleOverlay extends StatefulWidget {
+  final String currentTitle;
+  final ValueChanged<String> onConfirmed;
+  final VoidCallback onDismissed;
+
+  const _EditTitleOverlay({
+    required this.currentTitle,
+    required this.onConfirmed,
+    required this.onDismissed,
+  });
+
+  @override
+  State<_EditTitleOverlay> createState() => _EditTitleOverlayState();
+
+  /// 显示编辑标题 Overlay
+  static void show({
+    required BuildContext context,
+    required String currentTitle,
+    required ValueChanged<String> onConfirmed,
+    required VoidCallback onDismissed,
+  }) {
+    final overlay = Overlay.of(context);
+    OverlayEntry? entryRef;
+    
+    final entry = OverlayEntry(
+      builder: (context) => _EditTitleOverlay(
+        currentTitle: currentTitle,
+        onConfirmed: (newTitle) {
+          entryRef?.remove();
+          onConfirmed(newTitle);
+        },
+        onDismissed: () {
+          entryRef?.remove();
+          onDismissed();
+        },
+      ),
+    );
+    
+    entryRef = entry;
+    overlay.insert(entry);
+  }
+}
+
+class _EditTitleOverlayState extends State<_EditTitleOverlay> {
+  late TextEditingController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: widget.currentTitle);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onTap: () => widget.onDismissed(),
+      child: Stack(
+        children: [
+          // 半透明遮罩
+          Container(color: Colors.black54),
+          // Dialog 内容
+          Center(
+            child: GestureDetector(
+              onTap: () {}, // 阻止点击事件冒泡到遮罩
+              child: Material(
+                type: MaterialType.transparency,
+                child: Container(
+                  constraints:
+                      const BoxConstraints(maxWidth: 400, maxHeight: 500),
+                  child: Card(
+                    margin: const EdgeInsets.all(24),
+                    child: Padding(
+                      padding: const EdgeInsets.all(24),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            '编辑录音名称',
+                            style: Theme.of(context).textTheme.titleLarge,
+                          ),
+                          const SizedBox(height: 16),
+                          TextField(
+                            controller: _controller,
+                            decoration: const InputDecoration(
+                              hintText: '输入新名称',
+                              border: OutlineInputBorder(),
+                            ),
+                            autofocus: true,
+                            maxLength: 50,
+                            onSubmitted: (_) => _confirm(),
+                          ),
+                          const SizedBox(height: 16),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.end,
+                            children: [
+                              TextButton(
+                                onPressed: () => widget.onDismissed(),
+                                child: const Text('取消'),
+                              ),
+                              const SizedBox(width: 8),
+                              FilledButton(
+                                onPressed: _confirm,
+                                child: const Text('确定'),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _confirm() {
+    final newName = _controller.text.trim();
+    if (newName.isNotEmpty) {
+      widget.onConfirmed(newName);
     }
   }
 }

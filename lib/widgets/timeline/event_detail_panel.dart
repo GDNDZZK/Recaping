@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:open_filex/open_filex.dart';
 
 import '../../core/utils/date_format_util.dart';
 import '../../models/timeline_event.dart';
@@ -303,23 +304,22 @@ class _EventDetailPanelState extends State<EventDetailPanel> {
   Widget _buildPhotoContent(ThemeData theme, ColorScheme colorScheme) {
     final imagePath = widget.event.mediaFilePath ?? widget.event.thumbnailPath;
     if (imagePath == null) {
-      return Center(
-        child: Column(
-          children: [
-            Icon(
-              Icons.broken_image,
-              size: 48,
-              color: colorScheme.onSurface.withValues(alpha: 0.3),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              '图片不可用',
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: colorScheme.onSurface.withValues(alpha: 0.5),
-              ),
-            ),
-          ],
-        ),
+      return _buildMediaUnavailablePlaceholder(
+        theme: theme,
+        colorScheme: colorScheme,
+        icon: Icons.broken_image,
+        message: '图片不可用',
+      );
+    }
+
+    // 检查文件是否存在
+    final file = File(imagePath);
+    if (!file.existsSync()) {
+      return _buildMediaUnavailablePlaceholder(
+        theme: theme,
+        colorScheme: colorScheme,
+        icon: Icons.broken_image,
+        message: '图片文件不存在',
       );
     }
 
@@ -337,7 +337,7 @@ class _EventDetailPanelState extends State<EventDetailPanel> {
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxHeight: 300),
           child: Image.file(
-            File(imagePath),
+            file,
             fit: BoxFit.contain,
             width: double.infinity,
             errorBuilder: (context, error, stackTrace) {
@@ -377,64 +377,149 @@ class _EventDetailPanelState extends State<EventDetailPanel> {
   /// 构建视频内容
   Widget _buildVideoContent(ThemeData theme, ColorScheme colorScheme) {
     final thumbnailPath = widget.event.thumbnailPath;
+    final mediaFilePath = widget.event.mediaFilePath;
+
+    // 判断缩略图是否可用
+    final hasThumbnail = thumbnailPath != null && File(thumbnailPath).existsSync();
+    // 判断视频文件是否可用
+    final hasVideoFile = mediaFilePath != null && File(mediaFilePath).existsSync();
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        if (thumbnailPath != null)
-          ClipRRect(
+        // 缩略图区域或占位图标
+        GestureDetector(
+          onTap: hasVideoFile ? () => _openVideoFile(mediaFilePath) : null,
+          child: ClipRRect(
             borderRadius: BorderRadius.circular(12),
-            child: Image.file(
-              File(thumbnailPath),
-              fit: BoxFit.cover,
-              width: double.infinity,
-              height: 200,
-              errorBuilder: (context, error, stackTrace) {
-                return Container(
-                  height: 200,
-                  decoration: BoxDecoration(
-                    color: colorScheme.surfaceContainerHighest,
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Center(
-                    child: Icon(
-                      Icons.videocam,
-                      size: 48,
-                      color: colorScheme.onSurface.withValues(alpha: 0.3),
-                    ),
-                  ),
-                );
-              },
-            ),
-          )
-        else
-          Container(
-            height: 200,
-            decoration: BoxDecoration(
-              color: colorScheme.surfaceContainerHighest,
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(
-                    Icons.videocam,
-                    size: 48,
-                    color: colorScheme.tertiary.withValues(alpha: 0.5),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    '视频缩略图不可用',
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: colorScheme.onSurface.withValues(alpha: 0.5),
-                    ),
-                  ),
-                ],
-              ),
+            child: hasThumbnail
+                ? Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      Image.file(
+                        File(thumbnailPath),
+                        fit: BoxFit.cover,
+                        width: double.infinity,
+                        height: 200,
+                        errorBuilder: (context, error, stackTrace) {
+                          return _buildVideoPlaceholder(theme, colorScheme, hasVideoFile);
+                        },
+                      ),
+                      // 播放按钮叠加层
+                      if (hasVideoFile)
+                        Container(
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.4),
+                            shape: BoxShape.circle,
+                          ),
+                          padding: const EdgeInsets.all(12),
+                          child: const Icon(
+                            Icons.play_arrow,
+                            color: Colors.white,
+                            size: 36,
+                          ),
+                        ),
+                    ],
+                  )
+                : _buildVideoPlaceholder(theme, colorScheme, hasVideoFile),
+          ),
+        ),
+
+        // 视频文件信息和操作按钮
+        if (hasVideoFile) ...[
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: () => _openVideoFile(mediaFilePath),
+              icon: const Icon(Icons.play_circle_outline, size: 20),
+              label: const Text('打开视频'),
             ),
           ),
+        ] else if (mediaFilePath != null) ...[
+          const SizedBox(height: 12),
+          Text(
+            '视频文件不存在',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: colorScheme.error.withValues(alpha: 0.7),
+            ),
+          ),
+        ],
       ],
     );
+  }
+
+  /// 构建视频占位符（无缩略图时显示）
+  Widget _buildVideoPlaceholder(ThemeData theme, ColorScheme colorScheme, bool canOpen) {
+    return Container(
+      height: 200,
+      decoration: BoxDecoration(
+        color: colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              canOpen ? Icons.play_circle_outline : Icons.videocam,
+              size: 48,
+              color: colorScheme.tertiary.withValues(alpha: 0.5),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              canOpen ? '点击播放视频' : '视频文件不可用',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: colorScheme.onSurface.withValues(alpha: 0.5),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 构建媒体不可用占位符（照片/视频通用）
+  Widget _buildMediaUnavailablePlaceholder({
+    required ThemeData theme,
+    required ColorScheme colorScheme,
+    required IconData icon,
+    required String message,
+  }) {
+    return Center(
+      child: Column(
+        children: [
+          Icon(
+            icon,
+            size: 48,
+            color: colorScheme.onSurface.withValues(alpha: 0.3),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            message,
+            style: theme.textTheme.bodyMedium?.copyWith(
+              color: colorScheme.onSurface.withValues(alpha: 0.5),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 使用系统播放器打开视频文件
+  Future<void> _openVideoFile(String filePath) async {
+    try {
+      await OpenFilex.open(filePath);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('无法打开视频: $e'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    }
   }
 
   /// 构建文字笔记内容

@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/bookmark.dart';
 import '../models/photo.dart';
+import '../models/recording_segment.dart';
 import '../models/text_note.dart';
 import '../models/timeline_event.dart';
 import '../models/video_chunk.dart';
@@ -103,6 +104,13 @@ final amplitudeProvider = StreamProvider<AudioAmplitude?>((ref) {
   
   return service.onAmplitude;
 });
+
+/// 录音段列表 Provider
+///
+/// 管理当前录音会话的录音/暂停段列表，用于录音状态条可视化。
+/// 绿色段（isRecording=true）表示录音中，红色段（isRecording=false）表示暂停间隔。
+/// Author: GDNDZZK
+final recordingSegmentsProvider = StateProvider<List<RecordingSegment>>((ref) => []);
 
 /// 时间轴事件列表 Notifier
 ///
@@ -239,6 +247,11 @@ class RecordingControlNotifier extends StateNotifier<AsyncValue<void>> {
       // 更新时间轴事件列表的 service 引用
       _ref.read(timelineEventsProvider.notifier).setTimelineService(timelineService);
 
+      // 重置录音段列表，添加第一个录音段
+      _ref.read(recordingSegmentsProvider.notifier).state = [
+        const RecordingSegment(startMs: 0, isRecording: true),
+      ];
+
       state = const AsyncValue.data(null);
       return sessionId;
     } catch (e, st) {
@@ -250,20 +263,33 @@ class RecordingControlNotifier extends StateNotifier<AsyncValue<void>> {
   /// 暂停录音
   ///
   /// 总时间轴继续运行，仅暂停录音。
+  /// 关闭当前录音段，添加暂停段。
   Future<void> pauseRecording() async {
     try {
       final recordingService = _ref.read(recordingServiceProvider);
+      final currentMs = recordingService.totalElapsedMs;
+      
       await recordingService.pauseRecording();
+      
+      // 更新录音段：关闭当前录音段，添加暂停段
+      _updateSegmentsOnPause(currentMs);
     } catch (e, st) {
       state = AsyncValue.error(e, st);
     }
   }
 
   /// 继续录音
+  ///
+  /// 关闭当前暂停段，添加新的录音段。
   Future<void> resumeRecording() async {
     try {
       final recordingService = _ref.read(recordingServiceProvider);
+      final currentMs = recordingService.totalElapsedMs;
+      
       await recordingService.resumeRecording();
+      
+      // 更新录音段：关闭当前暂停段，添加新的录音段
+      _updateSegmentsOnResume(currentMs);
     } catch (e, st) {
       state = AsyncValue.error(e, st);
     }
@@ -272,10 +298,14 @@ class RecordingControlNotifier extends StateNotifier<AsyncValue<void>> {
   /// 暂停总时间轴
   ///
   /// 暂停总时间轴计时器和录音，暂停期间不可添加任何事件。
+  /// 不影响录音段，录音段只由录音本身的暂停/恢复操作触发。
   Future<void> pauseTotalTimeline() async {
     try {
       final recordingService = _ref.read(recordingServiceProvider);
+      
       await recordingService.pauseTotalTimeline();
+      
+      // 不更新录音段：暂停总时间轴不应改变录音段状态
     } catch (e, st) {
       state = AsyncValue.error(e, st);
     }
@@ -284,10 +314,15 @@ class RecordingControlNotifier extends StateNotifier<AsyncValue<void>> {
   /// 继续总时间轴
   ///
   /// 恢复总时间轴计时器和录音。
+  /// 不影响录音段和录音状态，保持录音的原始状态。
   Future<void> resumeTotalTimeline() async {
     try {
       final recordingService = _ref.read(recordingServiceProvider);
+      
       await recordingService.resumeTotalTimeline();
+      
+      // 不更新录音段：恢复总时间轴不应改变录音段状态
+      // 如果录音之前是暂停的，恢复后仍然保持暂停状态
     } catch (e, st) {
       state = AsyncValue.error(e, st);
     }
@@ -336,6 +371,10 @@ class RecordingControlNotifier extends StateNotifier<AsyncValue<void>> {
       if (!mounted) return;
       _ref.read(timelineEventsProvider.notifier).clear();
 
+      // 清理录音段列表
+      if (!mounted) return;
+      _ref.read(recordingSegmentsProvider.notifier).state = [];
+
       // 刷新会话列表，确保首页能立即显示新录音
       if (!mounted) return;
       _ref.read(sessionListProvider.notifier).loadSessions();
@@ -354,6 +393,7 @@ class RecordingControlNotifier extends StateNotifier<AsyncValue<void>> {
   ///
   /// 调用相机服务拍照，将照片添加到时间轴。
   /// 总时间轴暂停时不执行。
+  /// 使用 [RecordingService.totalElapsedMs] 作为时间戳，确保与录音时间轴一致。
   Future<void> takePhoto() async {
     try {
       // 检查总时间轴是否暂停
@@ -368,10 +408,13 @@ class RecordingControlNotifier extends StateNotifier<AsyncValue<void>> {
       final timelineService = timelineNotifier._timelineService;
       if (timelineService == null) return;
 
+      // 使用 totalElapsedMs 作为时间戳，确保与录音时间轴一致
+      final timestamp = recordingService.totalElapsedMs;
       final photo = await timelineService.addPhoto(
         result.data,
         width: result.width,
         height: result.height,
+        timestamp: timestamp,
       );
       await timelineNotifier.addPhoto(photo);
     } catch (e, st) {
@@ -383,6 +426,7 @@ class RecordingControlNotifier extends StateNotifier<AsyncValue<void>> {
   ///
   /// 调用相机服务从相册选择照片，将照片添加到时间轴。
   /// 总时间轴暂停时不执行。
+  /// 使用 [RecordingService.totalElapsedMs] 作为时间戳，确保与录音时间轴一致。
   Future<void> pickPhotoFromGallery() async {
     try {
       // 检查总时间轴是否暂停
@@ -397,10 +441,13 @@ class RecordingControlNotifier extends StateNotifier<AsyncValue<void>> {
       final timelineService = timelineNotifier._timelineService;
       if (timelineService == null) return;
 
+      // 使用 totalElapsedMs 作为时间戳，确保与录音时间轴一致
+      final timestamp = recordingService.totalElapsedMs;
       final photo = await timelineService.addPhoto(
         result.data,
         width: result.width,
         height: result.height,
+        timestamp: timestamp,
       );
       await timelineNotifier.addPhoto(photo);
     } catch (e, st) {
@@ -413,6 +460,7 @@ class RecordingControlNotifier extends StateNotifier<AsyncValue<void>> {
   /// [content] 笔记内容
   /// [title] 笔记标题（可选）
   /// 总时间轴暂停时不执行。
+  /// 使用 [RecordingService.totalElapsedMs] 作为时间戳，确保与录音时间轴一致。
   Future<void> addTextNote(String content, {String? title}) async {
     try {
       // 检查总时间轴是否暂停
@@ -423,7 +471,9 @@ class RecordingControlNotifier extends StateNotifier<AsyncValue<void>> {
       final timelineService = timelineNotifier._timelineService;
       if (timelineService == null) return;
 
-      final note = await timelineService.addTextNote(content, title: title);
+      // 使用 totalElapsedMs 作为时间戳，确保与录音时间轴一致
+      final timestamp = recordingService.totalElapsedMs;
+      final note = await timelineService.addTextNote(content, title: title, timestamp: timestamp);
       await timelineNotifier.addTextNote(note);
     } catch (e, st) {
       state = AsyncValue.error(e, st);
@@ -435,6 +485,7 @@ class RecordingControlNotifier extends StateNotifier<AsyncValue<void>> {
   /// [label] 书签标签（可选）
   /// [color] 书签颜色（可选）
   /// 总时间轴暂停时不执行。
+  /// 使用 [RecordingService.totalElapsedMs] 作为时间戳，确保与录音时间轴一致。
   Future<void> addBookmark({String? label, String? color}) async {
     try {
       // 检查总时间轴是否暂停
@@ -445,9 +496,12 @@ class RecordingControlNotifier extends StateNotifier<AsyncValue<void>> {
       final timelineService = timelineNotifier._timelineService;
       if (timelineService == null) return;
 
+      // 使用 totalElapsedMs 作为时间戳，确保与录音时间轴一致
+      final timestamp = recordingService.totalElapsedMs;
       final bookmark = await timelineService.addBookmark(
         label: label,
         color: color,
+        timestamp: timestamp,
       );
       await timelineNotifier.addBookmark(bookmark);
     } catch (e, st) {
@@ -459,6 +513,7 @@ class RecordingControlNotifier extends StateNotifier<AsyncValue<void>> {
   ///
   /// 调用相机服务录制短视频，将视频添加到时间轴。
   /// 总时间轴暂停时不执行。
+  /// 使用 [RecordingService.totalElapsedMs] 作为时间戳，确保与录音时间轴一致。
   Future<void> recordVideo() async {
     try {
       // 检查总时间轴是否暂停
@@ -473,12 +528,59 @@ class RecordingControlNotifier extends StateNotifier<AsyncValue<void>> {
       final timelineService = timelineNotifier._timelineService;
       if (timelineService == null) return;
 
-      final videoChunk = await timelineService.addVideo(result.data);
+      // 使用 totalElapsedMs 作为时间戳，确保与录音时间轴一致
+      final timestamp = recordingService.totalElapsedMs;
+      final videoChunk = await timelineService.addVideo(result.data, timestamp: timestamp);
       await timelineNotifier.addVideo(videoChunk);
     } catch (e, st) {
       state = AsyncValue.error(e, st);
     }
   }
+
+  /// 暂停录音时更新录音段
+  ///
+  /// 关闭当前录音段（设置 endMs），添加暂停段。
+  void _updateSegmentsOnPause(int currentMs) {
+    final segments = _ref.read(recordingSegmentsProvider);
+    if (segments.isEmpty) return;
+
+    final updatedSegments = List<RecordingSegment>.from(segments);
+    // 关闭最后一个录音段
+    final lastSegment = updatedSegments.last;
+    updatedSegments[updatedSegments.length - 1] = lastSegment.copyWith(
+      endMs: currentMs,
+    );
+    // 添加暂停段
+    updatedSegments.add(RecordingSegment(
+      startMs: currentMs,
+      isRecording: false,
+    ));
+
+    _ref.read(recordingSegmentsProvider.notifier).state = updatedSegments;
+  }
+
+  /// 继续录音时更新录音段
+  ///
+  /// 关闭当前暂停段（设置 endMs），添加新的录音段。
+  void _updateSegmentsOnResume(int currentMs) {
+    final segments = _ref.read(recordingSegmentsProvider);
+    if (segments.isEmpty) return;
+
+    final updatedSegments = List<RecordingSegment>.from(segments);
+    // 关闭最后一个暂停段
+    final lastSegment = updatedSegments.last;
+    updatedSegments[updatedSegments.length - 1] = lastSegment.copyWith(
+      endMs: currentMs,
+    );
+    // 添加新的录音段
+    updatedSegments.add(RecordingSegment(
+      startMs: currentMs,
+      isRecording: true,
+    ));
+
+    _ref.read(recordingSegmentsProvider.notifier).state = updatedSegments;
+  }
+
 }
 
 /// 录音控制 Provider

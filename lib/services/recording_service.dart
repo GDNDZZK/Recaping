@@ -139,6 +139,9 @@ class RecordingService {
   /// 总时间轴暂停前已累计的时间（毫秒）
   int _totalElapsedBeforePause = 0;
 
+  /// 总时间轴暂停前的录音状态（用于恢复时还原正确的录音状态）
+  RecordingState? _stateBeforeTotalPause;
+
   // ==================== 定时器 ====================
 
   Timer? _tickTimer;
@@ -233,6 +236,7 @@ class RecordingService {
     _audioChunkStartMs = 0;
     _totalElapsedBeforePause = 0;
     _totalTimelineBase = null;
+    _stateBeforeTotalPause = null;
 
     // 开始第一段录音
     await _startRecordingChunk();
@@ -282,10 +286,20 @@ class RecordingService {
   ///
   /// 暂停总时间轴计时器和录音（如果正在录音）。
   /// 暂停期间不可添加任何事件。
+  ///
+  /// **重要**：必须先取消计时器再执行异步操作，否则在异步操作（文件 I/O）
+  /// 期间计时器会继续更新 [__totalElapsedMs]，导致时间跳跃。
   Future<void> pauseTotalTimeline() async {
     if (_state != RecordingState.recording && _state != RecordingState.paused) {
       return;
     }
+
+    // 记录总暂停前的录音状态，用于恢复时还原正确的状态
+    _stateBeforeTotalPause = _state;
+
+    // 先暂停总时间轴计时器，防止异步操作期间继续更新时间
+    _tickTimer?.cancel();
+    _tickTimer = null;
 
     // 保存当前累计的总时间
     _totalElapsedBeforePause = _totalElapsedMs;
@@ -297,32 +311,37 @@ class RecordingService {
       await _recorder.pause();
     }
 
-    // 暂停总时间轴计时器
-    _tickTimer?.cancel();
-    _tickTimer = null;
-
     _setState(RecordingState.totalPaused);
   }
 
   /// 继续总时间轴
   ///
-  /// 恢复总时间轴计时器和录音。
+  /// 恢复总时间轴计时器。
+  /// 如果总暂停前录音是活跃的，同时恢复录音；
+  /// 如果总暂停前录音是暂停的，仅恢复时间轴，保持录音暂停状态。
   Future<void> resumeTotalTimeline() async {
     if (_state != RecordingState.totalPaused) return;
+
+    // 恢复总暂停前的录音状态
+    final wasRecording = _stateBeforeTotalPause == RecordingState.recording;
+    _stateBeforeTotalPause = null;
 
     // 重置基准时间，保持时间连续性
     _totalTimelineBase = DateTime.now();
 
-    // 恢复录音
-    _audioChunkStartMs = _audioElapsedMs;
-    await _recorder.resume();
-    _chunkRecordingStartTime = DateTime.now();
+    if (wasRecording) {
+      // 之前是录音中，恢复录音
+      _audioChunkStartMs = _audioElapsedMs;
+      await _recorder.resume();
+      _chunkRecordingStartTime = DateTime.now();
+      _startChunkTimer();
+    }
+    // 如果之前是暂停状态，不恢复录音器
 
-    // 重启计时器
+    // 重启总时间轴计时器
     _startTickTimerFromPause();
-    _startChunkTimer();
 
-    _setState(RecordingState.recording);
+    _setState(wasRecording ? RecordingState.recording : RecordingState.paused);
   }
 
   /// 停止会话（结束总时间轴）

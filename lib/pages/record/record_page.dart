@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/utils/date_format_util.dart';
+import '../../models/recording_segment.dart';
 import '../../providers/recording_provider.dart';
 import '../../services/recording_service.dart';
 import '../../widgets/recording_controls/recording_controls.dart';
@@ -99,7 +100,19 @@ class _RecordPageState extends ConsumerState<RecordPage>
     final isPaused = recordingState == RecordingState.paused;
     final isTotalPaused = recordingState == RecordingState.totalPaused;
     final isActive = isRecording || isPaused || isTotalPaused;
-    
+
+    // 获取录音段，并实时更新最后一个段的 endMs 用于显示
+    final rawSegments = ref.watch(recordingSegmentsProvider);
+    List<RecordingSegment> displaySegments = rawSegments;
+    if (rawSegments.isNotEmpty && totalMs > 0) {
+      // 本地计算显示用的段列表，将最后一个活跃段延伸到当前时间
+      displaySegments = List<RecordingSegment>.from(rawSegments);
+      final lastSegment = displaySegments.last;
+      displaySegments[displaySegments.length - 1] = lastSegment.copyWith(
+        endMs: totalMs,
+      );
+    }
+
     // 获取振幅高度（0.0 ~ 1.0）
     final amplitude = amplitudeAsync.valueOrNull?.toNormalizedHeight() ?? 0.0;
 
@@ -144,7 +157,11 @@ class _RecordPageState extends ConsumerState<RecordPage>
 
             // 中部：实时时间轴
             Expanded(
-              child: RecordingTimeline(events: events),
+              child: RecordingTimeline(
+                events: events,
+                segments: displaySegments,
+                totalElapsedMs: totalMs,
+              ),
             ),
 
             // 分隔线
@@ -817,10 +834,13 @@ class _RecordPageState extends ConsumerState<RecordPage>
             child: const Text('继续录音'),
           ),
           FilledButton(
-            onPressed: () {
+            onPressed: () async {
               Navigator.pop(context);
-              ref.read(recordingControlProvider.notifier).stopSession();
-              this.context.pop();
+              // 先等待录音状态完全重置，再返回主页
+              await ref.read(recordingControlProvider.notifier).stopSession();
+              if (mounted) {
+                this.context.pop();
+              }
             },
             style: FilledButton.styleFrom(
               backgroundColor: Colors.red,

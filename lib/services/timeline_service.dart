@@ -57,16 +57,20 @@ class TimelineService {
   /// [imageData] 原始图片数据
   /// [width] 图片宽度（像素）
   /// [height] 图片高度（像素）
+  /// [timestamp] 事件时间戳（相对于会话开始的毫秒偏移）。
+  ///   如果不提供，则使用挂钟时间计算。
+  ///   建议传入 [RecordingService.totalElapsedMs] 以确保与录音时间轴一致。
   ///
   /// 将照片数据写入文件系统，生成缩略图，数据库存路径引用。
   Future<Photo> addPhoto(
     Uint8List imageData, {
     int? width,
     int? height,
+    int? timestamp,
   }) async {
     _ensureSessionActive();
 
-    final timestamp = _currentTimestamp;
+    final ts = timestamp ?? _currentTimestamp;
     final photoId = _uuid.v4();
 
     // 相对路径
@@ -93,7 +97,7 @@ class TimelineService {
 
     final photo = Photo(
       id: photoId,
-      timestamp: timestamp,
+      timestamp: ts,
       filePath: photoRelativePath,
       thumbnailPath: thumbRelativePath,
       format: AppConstants.defaultPhotoFormat,
@@ -111,16 +115,20 @@ class TimelineService {
   ///
   /// [videoData] 完整视频数据
   /// [format] 视频格式（默认 mp4）
+  /// [timestamp] 事件时间戳（相对于会话开始的毫秒偏移）。
+  ///   如果不提供，则使用挂钟时间计算。
+  ///   建议传入 [RecordingService.totalElapsedMs] 以确保与录音时间轴一致。
   ///
   /// 将视频数据写入文件系统，数据库存路径引用。
   /// 简化处理：将整个视频作为一个 VideoChunk 存储（chunk_index=0）。
   Future<VideoChunk> addVideo(
     Uint8List videoData, {
     String format = 'mp4',
+    int? timestamp,
   }) async {
     _ensureSessionActive();
 
-    final timestamp = _currentTimestamp;
+    final ts = timestamp ?? _currentTimestamp;
     final videoId = _uuid.v4();
     final chunkId = _uuid.v4();
 
@@ -140,8 +148,8 @@ class TimelineService {
       id: chunkId,
       videoId: videoId,
       chunkIndex: 0,
-      startTime: timestamp,
-      endTime: timestamp + AppConstants.videoChunkDurationMs,
+      startTime: ts,
+      endTime: ts + AppConstants.videoChunkDurationMs,
       filePath: videoRelativePath,
       format: format,
       thumbnailPath: null, // 视频缩略图生成较复杂，暂不实现
@@ -157,14 +165,17 @@ class TimelineService {
   ///
   /// [content] 笔记内容
   /// [title] 笔记标题（可选）
-  Future<TextNote> addTextNote(String content, {String? title}) async {
+  /// [timestamp] 事件时间戳（相对于会话开始的毫秒偏移）。
+  ///   如果不提供，则使用挂钟时间计算。
+  ///   建议传入 [RecordingService.totalElapsedMs] 以确保与录音时间轴一致。
+  Future<TextNote> addTextNote(String content, {String? title, int? timestamp}) async {
     _ensureSessionActive();
 
-    final timestamp = _currentTimestamp;
+    final ts = timestamp ?? _currentTimestamp;
 
     final note = TextNote(
       id: _uuid.v4(),
-      timestamp: timestamp,
+      timestamp: ts,
       title: title,
       content: content,
       createdAt: DateTime.now(),
@@ -185,17 +196,21 @@ class TimelineService {
   ///
   /// [label] 书签标签（可选）
   /// [color] 书签颜色（十六进制，如 #FF6B6B）
+  /// [timestamp] 事件时间戳（相对于会话开始的毫秒偏移）。
+  ///   如果不提供，则使用挂钟时间计算。
+  ///   建议传入 [RecordingService.totalElapsedMs] 以确保与录音时间轴一致。
   Future<Bookmark> addBookmark({
     String? label,
     String? color,
+    int? timestamp,
   }) async {
     _ensureSessionActive();
 
-    final timestamp = _currentTimestamp;
+    final ts = timestamp ?? _currentTimestamp;
 
     final bookmark = Bookmark(
       id: _uuid.v4(),
-      timestamp: timestamp,
+      timestamp: ts,
       label: label,
       color: color ?? AppConstants.defaultBookmarkColor,
       createdAt: DateTime.now(),

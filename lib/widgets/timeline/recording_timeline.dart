@@ -6,6 +6,21 @@ import 'package:flutter/material.dart';
 import '../../models/recording_segment.dart';
 import '../../models/timeline_event.dart';
 
+/// 事件显示模式枚举
+///
+/// 根据事件间的可用像素间距决定显示详细程度。
+/// Author: GDNDZZK
+enum EventDisplayMode {
+  /// 紧凑模式：仅图标 + 标签（约 24dp）
+  compact,
+
+  /// 正常模式：图标 + 标签 + 时间戳 + 背景卡片（约 48dp）
+  normal,
+
+  /// 详细模式：图标 + 标签 + 时间戳 + 内容预览 + 缩略图（约 60-166dp）
+  detailed,
+}
+
 /// 录音时间轴组件（纵向持续延伸方案）
 ///
 /// 布局：左侧时间标签 + 中间彩色时间轴线 + 右侧事件标记。
@@ -25,12 +40,18 @@ class RecordingTimeline extends StatefulWidget {
   /// 滚动控制器（可选）
   final ScrollController? scrollController;
 
+  /// 事件点击回调（可选）
+  ///
+  /// 用户点击时间轴上的事件卡片时触发，由父组件处理详情展示。
+  final void Function(TimelineEvent event)? onEventTap;
+
   const RecordingTimeline({
     super.key,
     required this.events,
     required this.segments,
     required this.totalElapsedMs,
     this.scrollController,
+    this.onEventTap,
   });
 
   @override
@@ -214,6 +235,32 @@ class _RecordingTimelineState extends State<RecordingTimeline>
   /// 事件标记区域左偏移
   static const double _eventLeft = 68.0;
 
+  // ===== 显示模式高度常量 =====
+
+  /// 紧凑模式高度（图标 + 单行文本）
+  static const double _compactHeight = 24.0;
+
+  /// 正常模式高度（图标 + 标签 + 时间戳 + 背景卡片）
+  static const double _normalHeight = 48.0;
+
+  /// 详细模式基础高度（图标 + 标签 + 时间戳）
+  static const double _detailedBaseHeight = 60.0;
+
+  /// 详细模式文本行高
+  static const double _detailedLineHeight = 16.0;
+
+  /// 详细模式最大文本行数
+  static const int _detailedMaxLines = 3;
+
+  /// 详细模式缩略图高度（64dp 缩略图 + 间距）
+  static const double _detailedThumbnailHeight = 80.0;
+
+  /// 同时间戳事件垂直偏移
+  static const double _sameTimeOffset = 28.0;
+
+  /// 最小事件间距
+  static const double _minGap = 2.0;
+
   // ===== 颜色常量 =====
 
   /// 录音段颜色（绿色）
@@ -258,6 +305,125 @@ class _RecordingTimelineState extends State<RecordingTimeline>
   /// 过滤掉 audio 类型的事件（录音信息已在时间轴段中显示）
   List<TimelineEvent> get _filteredEvents =>
       widget.events.where((e) => e.type != TimelineEventType.audio).toList();
+
+  /// 估算事件在详细模式下的显示高度（dp）
+  ///
+  /// 根据事件内容动态计算：基础高度 + 文本行数 × 行高 + 缩略图高度。
+  double _estimateEventHeight(TimelineEvent event) {
+    double height = _detailedBaseHeight;
+
+    // 文本内容高度
+    if (event.textContent != null && event.textContent!.isNotEmpty) {
+      // 估算文本行数（每行约 40 个字符）
+      final lineCount = (event.textContent!.length / 40).ceil();
+      final clampedLines = lineCount.clamp(1, _detailedMaxLines);
+      height += clampedLines * _detailedLineHeight;
+    }
+
+    // 缩略图高度（照片/视频）
+    if (event.thumbnailPath != null && event.thumbnailPath!.isNotEmpty) {
+      height += _detailedThumbnailHeight;
+    }
+
+    return height;
+  }
+
+  /// 基于事件间像素间距计算每个事件的显示模式
+  ///
+  /// 从最后一个事件向前遍历，根据与下一个事件的像素间距决定最高可用显示级别。
+  /// 同时间戳事件（差距 < 1ms）使用紧凑模式并添加垂直偏移。
+  ///
+  /// 返回一个记录，包含：
+  /// - `modes`: 事件索引 → 显示模式的映射
+  /// - `offsets`: 事件索引 → 垂直偏移的映射（用于同时间戳事件叠加显示）
+  ({Map<int, EventDisplayMode> modes, Map<int, double> offsets})
+      _calculateEventDisplayModes() {
+    final events = _filteredEvents;
+    final modes = <int, EventDisplayMode>{};
+    final offsets = <int, double>{};
+
+    if (events.isEmpty) return (modes: modes, offsets: offsets);
+
+    // 计算每个事件的 Y 坐标
+    final yPositions = events.map((e) => _msToY(e.timestamp)).toList();
+
+    // 从最后一个事件向前遍历
+    for (int i = events.length - 1; i >= 0; i--) {
+      // 检查是否有同时间戳的后续事件，计算垂直偏移
+      int sameTimeCount = 0;
+      for (int j = i + 1; j < events.length; j++) {
+        if ((events[j].timestamp - events[i].timestamp).abs() < 1) {
+          sameTimeCount++;
+        } else {
+          break;
+        }
+      }
+
+      // 同时间戳事件使用紧凑模式 + 垂直偏移
+      if (sameTimeCount > 0) {
+        modes[i] = EventDisplayMode.compact;
+        offsets[i] = sameTimeCount * _sameTimeOffset;
+        continue;
+      }
+
+      // 最后一个事件或没有后续事件约束：使用详细模式
+      if (i == events.length - 1) {
+        // 检查是否有同时间戳的前置事件
+        bool isSameTimeAsPrev = false;
+        if (i > 0) {
+          isSameTimeAsPrev =
+              (events[i].timestamp - events[i - 1].timestamp).abs() < 1;
+        }
+        modes[i] = isSameTimeAsPrev
+            ? EventDisplayMode.compact
+            : EventDisplayMode.detailed;
+        continue;
+      }
+
+      // 计算与下一个事件的像素间距
+      final gap = yPositions[i + 1] - yPositions[i];
+
+      // 考虑下一个事件已分配的显示模式高度和偏移
+      final nextMode = modes[i + 1]!;
+      final nextHeight = _heightForMode(nextMode, events[i + 1]);
+      final nextOffset = offsets[i + 1] ?? 0.0;
+
+      // 可用间距 = 实际间距 - 下一个事件占据的高度 - 偏移
+      final availableGap = gap - nextHeight - nextOffset;
+
+      // 根据可用间距决定最高可用显示级别
+      final detailedHeight = _estimateEventHeight(events[i]);
+
+      if (availableGap >= detailedHeight) {
+        modes[i] = EventDisplayMode.detailed;
+      } else if (availableGap >= _normalHeight) {
+        modes[i] = EventDisplayMode.normal;
+      } else {
+        modes[i] = EventDisplayMode.compact;
+        // 如果间距不足，添加垂直偏移叠加显示
+        if (availableGap < _compactHeight + _minGap) {
+          // 计算需要偏移多少才能显示
+          final overlapCount =
+              ((nextHeight + nextOffset - gap) / _sameTimeOffset).ceil();
+          offsets[i] = (overlapCount > 0 ? overlapCount : 1) * _sameTimeOffset;
+        }
+      }
+    }
+
+    return (modes: modes, offsets: offsets);
+  }
+
+  /// 获取指定显示模式对应的高度
+  double _heightForMode(EventDisplayMode mode, TimelineEvent event) {
+    switch (mode) {
+      case EventDisplayMode.compact:
+        return _compactHeight;
+      case EventDisplayMode.normal:
+        return _normalHeight;
+      case EventDisplayMode.detailed:
+        return _estimateEventHeight(event);
+    }
+  }
 
   /// 根据当前缩放值动态计算合适的刻度间隔（毫秒）
   int _calculateTickIntervalMs() {
@@ -557,108 +723,85 @@ class _RecordingTimelineState extends State<RecordingTimeline>
   // ==================== 事件标记卡片 ====================
 
   /// 构建事件标记卡片列表
+  ///
+  /// 使用基于重叠检测的自动折叠/展开逻辑，根据事件间实际像素间距
+  /// 决定每个事件的显示模式。
   List<Widget> _buildEventMarkers(ThemeData theme, ColorScheme colorScheme) {
-    return _filteredEvents.map((event) {
+    final events = _filteredEvents;
+    final displayResult = _calculateEventDisplayModes();
+    final modes = displayResult.modes;
+    final offsets = displayResult.offsets;
+
+    return List.generate(events.length, (index) {
+      final event = events[index];
       final y = _msToY(event.timestamp);
       final eventColor = _getEventColor(event.type, colorScheme, event.color);
       final icon = _getEventIcon(event.type);
+      final displayMode = modes[index] ?? EventDisplayMode.compact;
+      final verticalOffset = offsets[index] ?? 0.0;
 
       return Positioned(
-        top: y - 12, // 垂直居中对齐时间轴线位置
+        top: y - 12 + verticalOffset, // 垂直居中对齐时间轴线位置 + 偏移
         left: _eventLeft,
         right: 12,
-        child: _buildEventCard(event, theme, colorScheme, eventColor, icon),
+        child: _buildEventCard(
+          event: event,
+          theme: theme,
+          colorScheme: colorScheme,
+          eventColor: eventColor,
+          icon: icon,
+          displayMode: displayMode,
+        ),
       );
-    }).toList();
+    });
   }
 
   /// 构建单个事件标记卡片
   ///
-  /// 根据缩放级别显示不同详细程度的内容。
-  Widget _buildEventCard(
-    TimelineEvent event,
-    ThemeData theme,
-    ColorScheme colorScheme,
-    Color eventColor,
-    IconData icon,
-  ) {
+  /// 根据传入的 [displayMode] 显示不同详细程度的内容。
+  /// 用 [GestureDetector] 包裹以支持点击交互。
+  Widget _buildEventCard({
+    required TimelineEvent event,
+    required ThemeData theme,
+    required ColorScheme colorScheme,
+    required Color eventColor,
+    required IconData icon,
+    required EventDisplayMode displayMode,
+  }) {
     final label = event.label ?? _getEventLabel(event.type);
 
-    // 根据 pixelsPerMs 决定事件卡片详细程度
-    // 阈值：>0.01 为紧凑，>0.002 为正常，<=0.002 为详细
-    final isCompact = _pixelsPerMs > 0.01;
-    final isNormal = _pixelsPerMs > 0.002;
-
-    // 紧凑模式：仅图标 + 标签
-    if (isCompact) {
-      return Row(
-        children: [
-          Icon(icon, size: 14, color: eventColor),
-          const SizedBox(width: 4),
-          Flexible(
-            child: Text(
-              label,
-              style: theme.textTheme.bodySmall?.copyWith(
-                fontWeight: FontWeight.w500,
-                fontSize: 11,
-              ),
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-        ],
-      );
-    }
-
-    // 正常模式：图标 + 标签 + 时间（带背景卡片）
-    if (isNormal) {
-      return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-        decoration: BoxDecoration(
-          color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
-          borderRadius: BorderRadius.circular(6),
-        ),
-        child: Row(
+    // 根据显示模式构建内容
+    Widget content;
+    switch (displayMode) {
+      case EventDisplayMode.compact:
+        // 紧凑模式：仅图标 + 标签
+        content = Row(
           children: [
-            Icon(icon, size: 16, color: eventColor),
-            const SizedBox(width: 6),
+            Icon(icon, size: 14, color: eventColor),
+            const SizedBox(width: 4),
             Flexible(
               child: Text(
                 label,
                 style: theme.textTheme.bodySmall?.copyWith(
                   fontWeight: FontWeight.w500,
+                  fontSize: 11,
                 ),
                 overflow: TextOverflow.ellipsis,
               ),
             ),
-            const SizedBox(width: 8),
-            Text(
-              _formatTime(event.timestamp),
-              style: theme.textTheme.labelSmall?.copyWith(
-                fontFamily: 'monospace',
-                fontSize: 10,
-                color: colorScheme.onSurface.withValues(alpha: 0.4),
-              ),
-            ),
           ],
-        ),
-      );
-    }
+        );
+        break;
 
-    // 详细模式：图标 + 标签 + 时间 + 内容预览 + 缩略图（带边框卡片）
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(
-          color: eventColor.withValues(alpha: 0.3),
-          width: 1,
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
+      case EventDisplayMode.normal:
+        // 正常模式：图标 + 标签 + 时间（带背景卡片）
+        content = Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+            color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+            borderRadius: BorderRadius.circular(6),
+          ),
+          child: Row(
             children: [
               Icon(icon, size: 16, color: eventColor),
               const SizedBox(width: 6),
@@ -682,39 +825,91 @@ class _RecordingTimelineState extends State<RecordingTimeline>
               ),
             ],
           ),
-          // 文本内容预览（笔记等）
-          if (event.textContent != null && event.textContent!.isNotEmpty) ...[
-            const SizedBox(height: 4),
-            Text(
-              event.textContent!,
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: colorScheme.onSurface.withValues(alpha: 0.7),
-              ),
-              maxLines: 3,
-              overflow: TextOverflow.ellipsis,
+        );
+        break;
+
+      case EventDisplayMode.detailed:
+        // 详细模式：图标 + 标签 + 时间 + 内容预览 + 缩略图（带边框卡片）
+        content = Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          decoration: BoxDecoration(
+            color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+              color: eventColor.withValues(alpha: 0.3),
+              width: 1,
             ),
-          ],
-          // 缩略图（照片/视频）
-          if (event.thumbnailPath != null &&
-              event.thumbnailPath!.isNotEmpty) ...[
-            const SizedBox(height: 6),
-            ClipRRect(
-              borderRadius: BorderRadius.circular(4),
-              child: Image.file(
-                File(event.thumbnailPath!),
-                width: 64,
-                height: 64,
-                fit: BoxFit.cover,
-                errorBuilder: (_, __, ___) => const SizedBox(
-                  width: 64,
-                  height: 64,
-                  child: Icon(Icons.broken_image, size: 24),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(icon, size: 16, color: eventColor),
+                  const SizedBox(width: 6),
+                  Flexible(
+                    child: Text(
+                      label,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        fontWeight: FontWeight.w500,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    _formatTime(event.timestamp),
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      fontFamily: 'monospace',
+                      fontSize: 10,
+                      color: colorScheme.onSurface.withValues(alpha: 0.4),
+                    ),
+                  ),
+                ],
+              ),
+              // 文本内容预览（笔记等）
+              if (event.textContent != null &&
+                  event.textContent!.isNotEmpty) ...[
+                const SizedBox(height: 4),
+                Text(
+                  event.textContent!,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: colorScheme.onSurface.withValues(alpha: 0.7),
+                  ),
+                  maxLines: 3,
+                  overflow: TextOverflow.ellipsis,
                 ),
-              ),
-            ),
-          ],
-        ],
-      ),
+              ],
+              // 缩略图（照片/视频）
+              if (event.thumbnailPath != null &&
+                  event.thumbnailPath!.isNotEmpty) ...[
+                const SizedBox(height: 6),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(4),
+                  child: Image.file(
+                    File(event.thumbnailPath!),
+                    width: 64,
+                    height: 64,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) => const SizedBox(
+                      width: 64,
+                      height: 64,
+                      child: Icon(Icons.broken_image, size: 24),
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        );
+        break;
+    }
+
+    // 用 GestureDetector 包裹以支持点击交互
+    return GestureDetector(
+      onTap: () => widget.onEventTap?.call(event),
+      behavior: HitTestBehavior.opaque,
+      child: _TapFeedbackWrapper(child: content),
     );
   }
 
@@ -952,6 +1147,39 @@ class _RecordingTimelineState extends State<RecordingTimeline>
     } catch (_) {
       return const Color(0xFFFF6B6B);
     }
+  }
+}
+
+// ==================== 点击反馈包装器 ====================
+
+/// 事件卡片点击视觉反馈包装器
+///
+/// 按下时降低透明度，松开时恢复，提供视觉反馈。
+/// Author: GDNDZZK
+class _TapFeedbackWrapper extends StatefulWidget {
+  final Widget child;
+
+  const _TapFeedbackWrapper({required this.child});
+
+  @override
+  State<_TapFeedbackWrapper> createState() => _TapFeedbackWrapperState();
+}
+
+class _TapFeedbackWrapperState extends State<_TapFeedbackWrapper> {
+  bool _isPressed = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return Listener(
+      onPointerDown: (_) => setState(() => _isPressed = true),
+      onPointerUp: (_) => setState(() => _isPressed = false),
+      onPointerCancel: (_) => setState(() => _isPressed = false),
+      child: AnimatedOpacity(
+        opacity: _isPressed ? 0.6 : 1.0,
+        duration: const Duration(milliseconds: 150),
+        child: widget.child,
+      ),
+    );
   }
 }
 

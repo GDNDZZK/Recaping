@@ -1,13 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:open_filex/open_filex.dart';
-
 import '../../core/utils/date_format_util.dart';
+import '../../models/bookmark.dart';
+import '../../models/text_note.dart';
 import '../../models/timeline_event.dart';
 import '../../providers/playback_provider.dart';
 import '../../providers/session_provider.dart';
 import '../../widgets/audio/audio_player_controls.dart';
+import '../../widgets/timeline/event_detail_panel.dart';
 import '../../widgets/timeline/playback_timeline.dart';
 
 /// 回放页面
@@ -184,11 +185,10 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
                     .read(playbackControlProvider.notifier)
                     .seekTo(timestampMs);
               },
-              onPhotoTap: (event) => _handlePhotoTap(event),
-              onNoteTap: (event) => _handleNoteTap(event, theme, colorScheme),
-              onBookmarkTap: (event) =>
-                  _handleBookmarkTap(event, theme, colorScheme),
-              onVideoTap: (event) => _handleVideoTap(event),
+              onPhotoTap: (event) => _handleEventDetail(event),
+              onNoteTap: (event) => _handleEventDetail(event),
+              onBookmarkTap: (event) => _handleEventDetail(event),
+              onVideoTap: (event) => _handleEventDetail(event),
             ),
           ),
 
@@ -481,211 +481,47 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
 
   // ==================== 事件详情处理 ====================
 
-  /// 处理照片事件点击
+  /// 统一处理事件详情展示
   ///
-  /// 使用系统自带查看器打开照片文件。
-  Future<void> _handlePhotoTap(TimelineEvent event) async {
-    final filePath = event.mediaFilePath ?? event.thumbnailPath;
-    if (filePath != null) {
-      final result = await OpenFilex.open(filePath);
-      if (result.type != ResultType.done && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('无法打开照片: ${result.message}'),
-            duration: const Duration(seconds: 2),
-          ),
-        );
-      }
+  /// 使用 [EventDetailPanel] 显示事件详情，支持编辑和删除操作。
+  /// 录音事件仅跳转播放位置，不显示详情面板。
+  void _handleEventDetail(TimelineEvent event) {
+    // 录音事件仅跳转播放位置
+    if (event.type == TimelineEventType.audio) {
+      ref.read(playbackControlProvider.notifier).seekTo(event.timestamp);
+      return;
     }
-  }
 
-  /// 处理笔记事件点击
-  void _handleNoteTap(
-    TimelineEvent event,
-    ThemeData theme,
-    ColorScheme colorScheme,
-  ) {
-    showModalBottomSheet(
+    EventDetailPanel.show(
       context: context,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (context) => DraggableScrollableSheet(
-        initialChildSize: 0.4,
-        minChildSize: 0.2,
-        maxChildSize: 0.8,
-        expand: false,
-        builder: (context, scrollController) {
-          return Padding(
-            padding: const EdgeInsets.all(20),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // 拖拽指示条
-                Center(
-                  child: Container(
-                    width: 40,
-                    height: 4,
-                    decoration: BoxDecoration(
-                      color: colorScheme.onSurface.withValues(alpha: 0.2),
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                // 标题
-                Row(
-                  children: [
-                    Icon(
-                      Icons.edit_note,
-                      color: colorScheme.secondary,
-                    ),
-                    const SizedBox(width: 8),
-                    Text(
-                      event.label ?? '笔记',
-                      style: theme.textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const Spacer(),
-                    Text(
-                      _formatTimestamp(event.timestamp),
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        fontFamily: 'monospace',
-                        color: colorScheme.onSurface.withValues(alpha: 0.5),
-                      ),
-                    ),
-                  ],
-                ),
-                const Divider(height: 24),
-                // 内容
-                Expanded(
-                  child: SingleChildScrollView(
-                    controller: scrollController,
-                    child: Text(
-                      event.textContent ?? '',
-                      style: theme.textTheme.bodyMedium,
-                    ),
-                  ),
-                ),
-              ],
-            ),
+      event: event,
+      onEdit: (updatedEvent) async {
+        final eventsNotifier = ref.read(playbackEventsProvider.notifier);
+        if (event.type == TimelineEventType.textNote) {
+          final note = TextNote(
+            id: event.id,
+            timestamp: event.timestamp,
+            title: updatedEvent.label,
+            content: updatedEvent.textContent ?? '',
+            createdAt: DateTime.now(),
           );
-        },
-      ),
+          await eventsNotifier.updateTextNote(note);
+        } else if (event.type == TimelineEventType.bookmark) {
+          final bookmark = Bookmark(
+            id: event.id,
+            timestamp: event.timestamp,
+            label: updatedEvent.label,
+            color: updatedEvent.color ?? '#FF6B6B',
+            createdAt: DateTime.now(),
+          );
+          await eventsNotifier.updateBookmark(bookmark);
+        }
+      },
+      onDelete: () async {
+        final eventsNotifier = ref.read(playbackEventsProvider.notifier);
+        await eventsNotifier.removeEvent(event.id, event.type);
+      },
     );
-  }
-
-  /// 处理书签事件点击
-  void _handleBookmarkTap(
-    TimelineEvent event,
-    ThemeData theme,
-    ColorScheme colorScheme,
-  ) {
-    final bookmarkColor = _parseColor(event.color);
-
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Row(
-          children: [
-            Icon(Icons.bookmark, color: bookmarkColor),
-            const SizedBox(width: 8),
-            const Text('书签'),
-          ],
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              event.label ?? '未命名书签',
-              style: theme.textTheme.bodyLarge?.copyWith(
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                Icon(
-                  Icons.access_time,
-                  size: 14,
-                  color: colorScheme.onSurface.withValues(alpha: 0.5),
-                ),
-                const SizedBox(width: 4),
-                Text(
-                  _formatTimestamp(event.timestamp),
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    fontFamily: 'monospace',
-                    color: colorScheme.onSurface.withValues(alpha: 0.6),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                Text(
-                  '颜色: ',
-                  style: theme.textTheme.bodySmall,
-                ),
-                Container(
-                  width: 16,
-                  height: 16,
-                  decoration: BoxDecoration(
-                    color: bookmarkColor,
-                    shape: BoxShape.circle,
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('关闭'),
-          ),
-          FilledButton.tonal(
-            onPressed: () {
-              Navigator.pop(context);
-              ref
-                  .read(playbackControlProvider.notifier)
-                  .seekTo(event.timestamp);
-            },
-            child: const Text('跳转'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// 处理视频事件点击
-  ///
-  /// 使用系统自带播放器打开视频文件。
-  Future<void> _handleVideoTap(TimelineEvent event) async {
-    final filePath = event.mediaFilePath;
-    if (filePath != null) {
-      final result = await OpenFilex.open(filePath);
-      if (result.type != ResultType.done && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('无法打开视频: ${result.message}'),
-            duration: const Duration(seconds: 2),
-          ),
-        );
-      }
-    } else {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('视频文件路径不可用'),
-            duration: Duration(seconds: 2),
-          ),
-        );
-      }
-    }
   }
 
   // ==================== 菜单操作 ====================
@@ -835,26 +671,5 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
     );
   }
 
-  // ==================== 工具方法 ====================
-
-  /// 格式化时间戳（毫秒 → MM:SS）
-  String _formatTimestamp(int ms) {
-    final duration = Duration(milliseconds: ms);
-    final minutes = (duration.inMinutes).toString().padLeft(2, '0');
-    final seconds = (duration.inSeconds % 60).toString().padLeft(2, '0');
-    return '$minutes:$seconds';
-  }
-
-  /// 解析十六进制颜色字符串
-  Color _parseColor(String? colorStr) {
-    if (colorStr == null || colorStr.isEmpty) {
-      return const Color(0xFFFF6B6B);
-    }
-    try {
-      final hex = colorStr.replaceFirst('#', '');
-      return Color(int.parse('FF$hex', radix: 16));
-    } catch (_) {
-      return const Color(0xFFFF6B6B);
-    }
-  }
 }
+

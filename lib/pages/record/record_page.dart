@@ -3,12 +3,16 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/utils/date_format_util.dart';
+import '../../models/bookmark.dart';
 import '../../models/recording_segment.dart';
+import '../../models/text_note.dart';
+import '../../models/timeline_event.dart';
 import '../../providers/recording_provider.dart';
 import '../../providers/session_provider.dart';
 import '../../services/recording_service.dart';
 import '../../widgets/recording_controls/recording_controls.dart';
 import '../../widgets/recording_controls/waveform_indicator.dart';
+import '../../widgets/timeline/event_detail_panel.dart';
 import '../../widgets/timeline/recording_timeline.dart';
 
 /// 录音页面
@@ -177,6 +181,7 @@ class _RecordPageState extends ConsumerState<RecordPage>
                 events: events,
                 segments: displaySegments,
                 totalElapsedMs: totalMs,
+                onEventTap: (event) => _handleEventTap(event),
               ),
             ),
 
@@ -564,6 +569,42 @@ class _RecordPageState extends ConsumerState<RecordPage>
   }
 
   // ==================== 事件处理 ====================
+
+  /// 处理时间轴事件点击
+  ///
+  /// 显示事件详情面板，支持编辑和删除操作。
+  void _handleEventTap(TimelineEvent event) {
+    EventDetailPanel.show(
+      context: context,
+      event: event,
+      onEdit: (updatedEvent) async {
+        final eventsNotifier = ref.read(timelineEventsProvider.notifier);
+        if (event.type == TimelineEventType.textNote) {
+          final note = TextNote(
+            id: event.id,
+            timestamp: event.timestamp,
+            title: updatedEvent.label,
+            content: updatedEvent.textContent ?? '',
+            createdAt: DateTime.now(),
+          );
+          await eventsNotifier.updateTextNote(note);
+        } else if (event.type == TimelineEventType.bookmark) {
+          final bookmark = Bookmark(
+            id: event.id,
+            timestamp: event.timestamp,
+            label: updatedEvent.label,
+            color: updatedEvent.color ?? '#FF6B6B',
+            createdAt: DateTime.now(),
+          );
+          await eventsNotifier.updateBookmark(bookmark);
+        }
+      },
+      onDelete: () async {
+        final eventsNotifier = ref.read(timelineEventsProvider.notifier);
+        await eventsNotifier.removeEvent(event.id, event.type);
+      },
+    );
+  }
 
   /// 处理拍照
   Future<void> _handleTakePhoto() async {

@@ -165,6 +165,24 @@ class TimelineEventsNotifier extends StateNotifier<List<TimelineEvent>> {
     await refresh();
   }
 
+  /// 更新文字笔记
+  ///
+  /// 通过 [TimelineService] 更新笔记内容后自动刷新事件列表。
+  Future<void> updateTextNote(TextNote note) async {
+    if (_timelineService == null) return;
+    await _timelineService!.updateTextNote(note);
+    await refresh();
+  }
+
+  /// 更新书签
+  ///
+  /// 通过 [TimelineService] 更新书签内容后自动刷新事件列表。
+  Future<void> updateBookmark(Bookmark bookmark) async {
+    if (_timelineService == null) return;
+    await _timelineService!.updateBookmark(bookmark);
+    await refresh();
+  }
+
   /// 删除事件
   ///
   /// [id] 事件 ID

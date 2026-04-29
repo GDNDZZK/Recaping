@@ -2,8 +2,12 @@ import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../core/database/session_database.dart';
+import '../models/bookmark.dart';
+import '../models/text_note.dart';
 import '../models/timeline_event.dart';
 import '../services/audio_playback_service.dart';
+import '../services/timeline_service.dart';
 import 'session_provider.dart';
 
 /// 音频回放服务 Provider
@@ -74,10 +78,16 @@ final playbackSpeedProvider =
 
 /// 回放时间轴事件 Notifier
 ///
-/// 管理回放会话的时间轴事件列表。
+/// 管理回放会话的时间轴事件列表，支持编辑和删除操作。
 /// Author: GDNDZZK
 class PlaybackEventsNotifier extends StateNotifier<AsyncValue<List<TimelineEvent>>> {
   final Ref _ref;
+
+  /// 保存的会话 ID，用于刷新事件列表
+  String? _sessionId;
+
+  /// 保存的数据库引用，用于创建 TimelineService 实例
+  SessionDatabase? _database;
 
   PlaybackEventsNotifier(this._ref) : super(const AsyncValue.data([]));
 
@@ -90,6 +100,11 @@ class PlaybackEventsNotifier extends StateNotifier<AsyncValue<List<TimelineEvent
 
       final storageService = await _ref.read(storageServiceProvider.future);
       final sessionDb = await storageService.openSession(sessionId);
+
+      // 保存引用以供后续编辑/删除操作使用
+      _sessionId = sessionId;
+      _database = sessionDb;
+
       final events = await sessionDb.getTimelineEvents();
 
       if (mounted) {
@@ -100,6 +115,42 @@ class PlaybackEventsNotifier extends StateNotifier<AsyncValue<List<TimelineEvent
         state = AsyncValue.error(e, st);
       }
     }
+  }
+
+  /// 删除事件
+  ///
+  /// [eventId] 事件 ID
+  /// [type] 事件类型
+  Future<void> removeEvent(String eventId, TimelineEventType type) async {
+    final db = _database;
+    final sessionId = _sessionId;
+    if (db == null || sessionId == null) return;
+
+    final timelineService = TimelineService(db);
+    await timelineService.deleteEvent(eventId, type);
+    await loadEvents(sessionId);
+  }
+
+  /// 更新文字笔记
+  Future<void> updateTextNote(TextNote note) async {
+    final db = _database;
+    final sessionId = _sessionId;
+    if (db == null || sessionId == null) return;
+
+    final timelineService = TimelineService(db);
+    await timelineService.updateTextNote(note);
+    await loadEvents(sessionId);
+  }
+
+  /// 更新书签
+  Future<void> updateBookmark(Bookmark bookmark) async {
+    final db = _database;
+    final sessionId = _sessionId;
+    if (db == null || sessionId == null) return;
+
+    final timelineService = TimelineService(db);
+    await timelineService.updateBookmark(bookmark);
+    await loadEvents(sessionId);
   }
 }
 

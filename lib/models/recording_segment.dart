@@ -1,7 +1,7 @@
 /// 录音段数据模型
 ///
 /// 表示录音时间轴上的一段录音或暂停区间。
-/// [isRecording] 为 true 时表示正在录音（绿色），false 时表示暂停间隔（红色）。
+/// [isRecording] 为 true 时表示正在录音（红色），false 时表示暂停间隔（灰色）。
 /// [endMs] 为 null 时表示该段仍在进行中。
 /// Author: GDNDZZK
 class RecordingSegment {
@@ -11,7 +11,7 @@ class RecordingSegment {
   /// 段结束时间（相对于会话开始的毫秒偏移），null 表示仍在进行
   final int? endMs;
 
-  /// true = 录音中（绿色），false = 暂停间隔（红色）
+  /// true = 录音中（红色），false = 暂停间隔（灰色）
   final bool isRecording;
 
   const RecordingSegment({

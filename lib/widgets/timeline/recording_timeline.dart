@@ -25,7 +25,7 @@ enum EventDisplayMode {
 /// 录音时间轴组件（纵向持续延伸方案）
 ///
 /// 布局：左侧时间标签 + 中间彩色时间轴线 + 右侧事件标记。
-/// 绿色段（isRecording=true）表示录音中，红色段（isRecording=false）表示暂停间隔。
+/// 红色段（isRecording=true）表示录音中，灰色段（isRecording=false）表示暂停间隔。
 /// 时间轴始终显示并不断向下延伸，支持自动滚动和缩放。
 /// Author: GDNDZZK
 class RecordingTimeline extends StatefulWidget {
@@ -272,11 +272,11 @@ class _RecordingTimelineState extends State<RecordingTimeline>
 
   // ===== 颜色常量 =====
 
-  /// 录音段颜色（绿色）
-  static const Color _recordingColor = Color(0xFF4CAF50);
+  /// 录音段颜色（红色）
+  static const Color _recordingColor = Color(0xFFE53935);
 
-  /// 暂停段颜色（红色）
-  static const Color _pausedColor = Color(0xFFE57373);
+  /// 暂停段颜色（灰色）
+  static const Color _pausedColor = Color(0xFF9E9E9E);
 
   @override
   void didUpdateWidget(RecordingTimeline oldWidget) {
@@ -566,7 +566,7 @@ class _RecordingTimelineState extends State<RecordingTimeline>
               // 2. 刻度水平线（连接时间标签和时间轴线）
               ..._buildTickMarks(theme, totalMs),
 
-              // 3. 时间轴线段（绿色/红色）
+              // 3. 时间轴线段（红色/灰色）
               ..._buildTimelineSegments(theme, totalMs),
 
               // 4. 段边界圆点
@@ -665,7 +665,7 @@ class _RecordingTimelineState extends State<RecordingTimeline>
       );
     }
 
-    // 彩色段（绿色=录音，红色=暂停）
+    // 彩色段（红色=录音，灰色=暂停）
     for (final segment in widget.segments) {
       final startY = _msToY(segment.startMs);
       final endMs = segment.endMs ?? totalMs;

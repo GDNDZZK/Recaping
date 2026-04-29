@@ -99,7 +99,12 @@ class _RecordPageState extends ConsumerState<RecordPage>
   Future<void> _startNewSession() async {
     if (_sessionInitialized) return;
     _sessionInitialized = true;
-    await ref.read(recordingControlProvider.notifier).startSession();
+    final title = await ref.read(recordingControlProvider.notifier).startSession();
+    if (title != null && mounted) {
+      setState(() {
+        _titleController.text = title;
+      });
+    }
   }
 
   /// 获取当前录音状态

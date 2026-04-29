@@ -223,7 +223,7 @@ class RecordingService {
   ///
   /// 抛出 [StateError] 如果已经在录音会话中
   /// 抛出 [Exception] 如果麦克风权限未授予
-  Future<String> startSession(SessionDatabase sessionDb) async {
+  Future<String> startSession(SessionDatabase sessionDb, {required String sessionId}) async {
     if (_state != RecordingState.idle) {
       throw StateError('Already in a recording session');
     }
@@ -234,7 +234,7 @@ class RecordingService {
     }
 
     _sessionDb = sessionDb;
-    _currentSessionId = _uuid.v4();
+    _currentSessionId = sessionId;
     _totalElapsedMs = 0;
     _audioElapsedMs = 0;
     _chunkIndex = 0;

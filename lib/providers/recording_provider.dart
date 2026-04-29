@@ -258,7 +258,7 @@ class RecordingControlNotifier extends StateNotifier<AsyncValue<void>> {
       final sessionDb = await storageService.openSession(session.sessionId);
 
       // 开始录音
-      final sessionId = await recordingService.startSession(sessionDb);
+      final sessionId = await recordingService.startSession(sessionDb, sessionId: session.sessionId);
 
       // 初始化时间轴服务
       final timelineService = TimelineService(sessionDb);
@@ -273,7 +273,7 @@ class RecordingControlNotifier extends StateNotifier<AsyncValue<void>> {
       ];
 
       state = const AsyncValue.data(null);
-      return sessionId;
+      return session.title;
     } catch (e, st) {
       state = AsyncValue.error(e, st);
       return null;

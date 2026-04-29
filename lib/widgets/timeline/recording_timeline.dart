@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 
 import '../../models/recording_segment.dart';
 import '../../models/timeline_event.dart';
@@ -66,6 +67,14 @@ class _RecordingTimelineState extends State<RecordingTimeline>
 
   /// 仪表盘弹出/关闭动画控制器
   late final AnimationController _gaugeAnimController;
+
+  // ===== 跟随状态 =====
+
+  /// 是否跟随当前录音位置自动滚动
+  ///
+  /// 默认为 `true`，用户手动滚动时自动设为 `false`，
+  /// 点击跟随按钮可恢复为 `true`。
+  bool _isFollowing = true;
 
   @override
   void initState() {
@@ -278,20 +287,20 @@ class _RecordingTimelineState extends State<RecordingTimeline>
     }
   }
 
-  /// 自动滚动到底部（仅在用户位于底部附近时）
+  /// 自动滚动到底部（仅在跟随模式下）
   ///
-  /// 如果用户手动向上滚动查看历史事件，则不强制滚动。
+  /// 当 [_isFollowing] 为 `true` 时，自动滚动到最新位置。
+  /// 用户手动向上滚动查看历史事件时，[_isFollowing] 被设为 `false`，不强制滚动。
   /// 使用 [mounted] 检查确保 Widget 仍然有效。
   void _scrollToBottom() {
+    if (!_isFollowing) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
+      if (!mounted || !_isFollowing) return;
 
       final controller = widget.scrollController ?? _internalController;
       if (controller != null && controller.hasClients) {
         final pos = controller.position;
-        // 仅在用户位于底部附近（100dp 以内）时自动滚动
-        if (pos.maxScrollExtent > 0 &&
-            pos.pixels >= pos.maxScrollExtent - 100) {
+        if (pos.maxScrollExtent > 0) {
           controller.animateTo(
             pos.maxScrollExtent,
             duration: const Duration(milliseconds: 300),
@@ -300,6 +309,12 @@ class _RecordingTimelineState extends State<RecordingTimeline>
         }
       }
     });
+  }
+
+  /// 恢复跟随模式并滚动到当前位置
+  void _enableFollowing() {
+    setState(() => _isFollowing = true);
+    _scrollToBottom();
   }
 
   /// 过滤掉 audio 类型的事件（录音信息已在时间轴段中显示）
@@ -478,6 +493,8 @@ class _RecordingTimelineState extends State<RecordingTimeline>
               child: const SizedBox.expand(),
             ),
           ),
+        // 跟随/自由滚动切换按钮（非跟随时显示）
+        if (!_isFollowing) _buildFollowButton(theme, colorScheme),
         // 浮动缩放按钮
         _buildFloatingZoomButtons(theme, colorScheme),
         // 扇形仪表盘（带动画）
@@ -525,35 +542,46 @@ class _RecordingTimelineState extends State<RecordingTimeline>
     final viewHeight = MediaQuery.of(context).size.height * 0.3;
     final totalHeight = contentHeight > viewHeight ? contentHeight : viewHeight;
 
-    return SingleChildScrollView(
-      controller: widget.scrollController ?? _internalController,
-      padding: const EdgeInsets.symmetric(vertical: 16),
-      child: SizedBox(
-        height: totalHeight,
-        child: Stack(
-          clipBehavior: Clip.none,
-          children: [
-            // 1. 时间刻度标签
-            ..._buildTimeLabels(theme, totalMs),
+    // 使用 NotificationListener 检测用户手动滚动，
+    // 自动退出跟随模式
+    return NotificationListener<UserScrollNotification>(
+      onNotification: (notification) {
+        if (notification.direction != ScrollDirection.idle &&
+            _isFollowing) {
+          setState(() => _isFollowing = false);
+        }
+        return false;
+      },
+      child: SingleChildScrollView(
+        controller: widget.scrollController ?? _internalController,
+        padding: const EdgeInsets.symmetric(vertical: 16),
+        child: SizedBox(
+          height: totalHeight,
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              // 1. 时间刻度标签
+              ..._buildTimeLabels(theme, totalMs),
 
-            // 2. 刻度水平线（连接时间标签和时间轴线）
-            ..._buildTickMarks(theme, totalMs),
+              // 2. 刻度水平线（连接时间标签和时间轴线）
+              ..._buildTickMarks(theme, totalMs),
 
-            // 3. 时间轴线段（绿色/红色）
-            ..._buildTimelineSegments(theme, totalMs),
+              // 3. 时间轴线段（绿色/红色）
+              ..._buildTimelineSegments(theme, totalMs),
 
-            // 4. 段边界圆点
-            ..._buildSegmentDots(),
+              // 4. 段边界圆点
+              ..._buildSegmentDots(),
 
-            // 5. 事件连接线（从时间轴线到事件标记）
-            ..._buildEventConnectors(theme),
+              // 5. 事件连接线（从时间轴线到事件标记）
+              ..._buildEventConnectors(theme),
 
-            // 6. 事件标记卡片
-            ..._buildEventMarkers(theme, colorScheme),
+              // 6. 事件标记卡片
+              ..._buildEventMarkers(theme, colorScheme),
 
-            // 7. 当前位置指示器
-            if (totalMs > 0) _buildCurrentPositionIndicator(totalMs),
-          ],
+              // 7. 当前位置指示器
+              if (totalMs > 0) _buildCurrentPositionIndicator(totalMs),
+            ],
+          ),
         ),
       ),
     );
@@ -936,6 +964,42 @@ class _RecordingTimelineState extends State<RecordingTimeline>
               spreadRadius: 2,
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  // ==================== 跟随按钮 ====================
+
+  /// 构建跟随/自由滚动切换按钮
+  ///
+  /// 仅在非跟随模式时显示，点击后恢复跟随并平滑滚动到当前位置。
+  /// 跟随中时按钮隐藏，用户手动滚动后自动出现。
+  Widget _buildFollowButton(ThemeData theme, ColorScheme colorScheme) {
+    return Positioned(
+      right: 12,
+      bottom: 140,
+      child: Material(
+        color: colorScheme.primary,
+        borderRadius: BorderRadius.circular(20),
+        elevation: 4,
+        shadowColor: colorScheme.primary.withValues(alpha: 0.3),
+        child: InkWell(
+          onTap: _enableFollowing,
+          borderRadius: BorderRadius.circular(20),
+          child: Container(
+            width: 36,
+            height: 36,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Icon(
+              Icons.my_location,
+              size: 18,
+              color: colorScheme.onPrimary,
+            ),
+          ),
         ),
       ),
     );

@@ -508,7 +508,6 @@ class _RecordPageState extends ConsumerState<RecordPage>
                   onResume: () {
                     ref.read(recordingControlProvider.notifier).resumeRecording();
                   },
-                  onStop: () => _showStopConfirmDialog(),
                 ),
               ),
             ],

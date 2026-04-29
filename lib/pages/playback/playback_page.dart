@@ -1,20 +1,19 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import '../../core/utils/date_format_util.dart';
 import '../../models/bookmark.dart';
 import '../../models/text_note.dart';
 import '../../models/timeline_event.dart';
 import '../../providers/playback_provider.dart';
 import '../../providers/session_provider.dart';
-import '../../widgets/audio/audio_player_controls.dart';
+import '../../services/audio_playback_service.dart';
 import '../../widgets/timeline/event_detail_panel.dart';
-import '../../widgets/timeline/playback_timeline.dart';
+import '../../widgets/timeline/recording_timeline.dart';
 
 /// 回放页面
 ///
 /// 提供音频回放、时间轴事件同步显示等功能。
-/// 包含会话信息卡片、时间轴视图和底部音频播放控制栏。
+/// 复用录音页面的布局风格：顶部状态区 + 中部时间轴 + 底部控制栏。
 /// Author: GDNDZZK
 class PlaybackPage extends ConsumerStatefulWidget {
   /// 要回放的会话 ID
@@ -27,9 +26,6 @@ class PlaybackPage extends ConsumerStatefulWidget {
 }
 
 class _PlaybackPageState extends ConsumerState<PlaybackPage> {
-  /// 会话信息卡片是否展开
-  bool _isInfoExpanded = false;
-
   /// 是否已加载数据
   bool _isLoading = true;
 
@@ -80,6 +76,17 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
     // 监听播放位置
     final positionAsync = ref.watch(playbackPositionProvider);
     final position = positionAsync.valueOrNull ?? Duration.zero;
+
+    // 监听播放状态（用于判断是否正在播放）
+    final stateAsync = ref.watch(playbackStateProvider);
+    final playbackState = stateAsync.valueOrNull;
+    final isPlaying = playbackState == PlaybackState.playing;
+
+    // 监听播放速度
+    final speed = ref.watch(playbackSpeedProvider);
+
+    // 监听总时长
+    final duration = ref.watch(playbackDurationProvider);
 
     // 监听时间轴事件
     final eventsAsync = ref.watch(playbackEventsProvider);
@@ -171,33 +178,251 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
       appBar: _buildAppBar(context, theme, colorScheme, accentColor),
       body: Column(
         children: [
-          // 会话信息卡片
-          _buildSessionInfoCard(theme, colorScheme, accentColor, events),
+          // 顶部播放状态区域
+          _buildPlaybackStatusArea(
+            context,
+            isPlaying,
+            position,
+            duration,
+          ),
+          const Divider(height: 1),
 
-          // 时间轴视图
+          // 中部时间轴（复用 RecordingTimeline）
           Expanded(
-            child: PlaybackTimeline(
+            child: RecordingTimeline(
               events: events,
+              totalElapsedMs: totalDurationMs,
+              isPlaybackMode: true,
               currentPlaybackMs: position.inMilliseconds,
-              totalDurationMs: totalDurationMs,
-              onEventTap: (timestampMs) {
-                ref
-                    .read(playbackControlProvider.notifier)
-                    .seekTo(timestampMs);
-              },
-              onPhotoTap: (event) => _handleEventDetail(event),
-              onNoteTap: (event) => _handleEventDetail(event),
-              onBookmarkTap: (event) => _handleEventDetail(event),
-              onVideoTap: (event) => _handleEventDetail(event),
+              isPlaying: isPlaying,
+              onEventTap: (event) => _handleEventDetail(event),
             ),
           ),
+          const Divider(height: 1),
 
-          // 底部音频播放控制栏
-          const AudioPlayerControls(accentColor: accentColor),
+          // 底部播放控制栏
+          _buildPlaybackBottomBar(context, isPlaying, speed),
         ],
       ),
     );
   }
+
+  // ==================== 顶部播放状态区域 ====================
+
+  /// 构建顶部播放状态区域
+  ///
+  /// 参考录音页面的状态区域样式，显示播放状态、时间和进度条。
+  Widget _buildPlaybackStatusArea(
+    BuildContext context,
+    bool isPlaying,
+    Duration position,
+    Duration duration,
+  ) {
+    final theme = Theme.of(context);
+    final totalMs = duration.inMilliseconds.toDouble();
+    final positionMs =
+        position.inMilliseconds.toDouble().clamp(0.0, totalMs > 0 ? totalMs : 0.0);
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+      child: Column(
+        children: [
+          // 播放状态指示器
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Container(
+                width: 8,
+                height: 8,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: isPlaying ? Colors.green : Colors.grey,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                isPlaying ? '播放中' : '已暂停',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: isPlaying ? Colors.green : Colors.grey,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          // 当前时间 / 总时长
+          Text(
+            '${_formatDuration(position)} / ${_formatDuration(duration)}',
+            style: theme.textTheme.headlineMedium?.copyWith(
+              fontFamily: 'monospace',
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(height: 8),
+          // 进度条
+          if (totalMs > 0)
+            SliderTheme(
+              data: const SliderThemeData(
+                thumbShape: RoundSliderThumbShape(enabledThumbRadius: 6),
+                overlayShape: RoundSliderOverlayShape(overlayRadius: 12),
+                trackHeight: 3,
+              ),
+              child: Slider(
+                value: positionMs,
+                min: 0,
+                max: totalMs,
+                onChanged: (value) {
+                  // 拖动时不立即跳转
+                },
+                onChangeEnd: (value) {
+                  ref.read(playbackControlProvider.notifier).seekTo(value.toInt());
+                },
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  // ==================== 底部播放控制栏 ====================
+
+  /// 构建底部播放控制栏
+  ///
+  /// 替代原来的 AudioPlayerControls，简化控制栏布局。
+  Widget _buildPlaybackBottomBar(
+    BuildContext context,
+    bool isPlaying,
+    double speed,
+  ) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          // 快退15秒
+          IconButton(
+            onPressed: () => _skipBySeconds(-15),
+            icon: const Icon(Icons.fast_rewind),
+            tooltip: '快退15秒',
+          ),
+          // 上一事件
+          IconButton(
+            onPressed: _skipToPreviousEvent,
+            icon: const Icon(Icons.skip_previous),
+            tooltip: '上一事件',
+          ),
+          // 播放/暂停大按钮
+          FloatingActionButton(
+            onPressed: _togglePlayPause,
+            backgroundColor: const Color(0xFF6B6BFF),
+            child: Icon(
+              isPlaying ? Icons.pause : Icons.play_arrow,
+              size: 32,
+            ),
+          ),
+          const SizedBox(width: 8),
+          // 下一事件
+          IconButton(
+            onPressed: _skipToNextEvent,
+            icon: const Icon(Icons.skip_next),
+            tooltip: '下一事件',
+          ),
+          // 快进15秒
+          IconButton(
+            onPressed: () => _skipBySeconds(15),
+            icon: const Icon(Icons.fast_forward),
+            tooltip: '快进15秒',
+          ),
+          // 速度按钮
+          _buildSpeedButton(speed),
+        ],
+      ),
+    );
+  }
+
+  // ==================== 辅助方法 ====================
+
+  /// 格式化时长为字符串（M:SS 或 H:MM:SS）
+  String _formatDuration(Duration duration) {
+    final hours = duration.inHours;
+    final minutes = duration.inMinutes.remainder(60);
+    final seconds = duration.inSeconds.remainder(60);
+    if (hours > 0) {
+      return '${hours.toString().padLeft(2, '0')}:${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
+    }
+    return '${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
+  }
+
+  /// 切换播放/暂停
+  void _togglePlayPause() {
+    final stateAsync = ref.read(playbackStateProvider);
+    final state = stateAsync.valueOrNull;
+    if (state == PlaybackState.playing) {
+      ref.read(playbackControlProvider.notifier).pause();
+    } else {
+      ref.read(playbackControlProvider.notifier).play();
+    }
+  }
+
+  /// 快进/快退指定秒数
+  void _skipBySeconds(int seconds) {
+    final position =
+        ref.read(playbackPositionProvider).valueOrNull ?? Duration.zero;
+    final duration = ref.read(playbackDurationProvider);
+    final newPosition = position + Duration(seconds: seconds);
+    ref.read(playbackControlProvider.notifier).seekTo(
+          newPosition.inMilliseconds.clamp(0, duration.inMilliseconds),
+        );
+  }
+
+  /// 跳转到上一个事件
+  void _skipToPreviousEvent() {
+    final eventsState = ref.read(playbackEventsProvider);
+    final events = eventsState.valueOrNull ?? [];
+    final position =
+        ref.read(playbackPositionProvider).valueOrNull ?? Duration.zero;
+    final positionMs = position.inMilliseconds;
+
+    final previousEvents =
+        events.where((e) => e.timestamp < positionMs - 1000).toList();
+    if (previousEvents.isNotEmpty) {
+      ref
+          .read(playbackControlProvider.notifier)
+          .seekTo(previousEvents.last.timestamp);
+    }
+  }
+
+  /// 跳转到下一个事件
+  void _skipToNextEvent() {
+    final eventsState = ref.read(playbackEventsProvider);
+    final events = eventsState.valueOrNull ?? [];
+    final position =
+        ref.read(playbackPositionProvider).valueOrNull ?? Duration.zero;
+    final positionMs = position.inMilliseconds;
+
+    final nextEvents =
+        events.where((e) => e.timestamp > positionMs + 1000).toList();
+    if (nextEvents.isNotEmpty) {
+      ref
+          .read(playbackControlProvider.notifier)
+          .seekTo(nextEvents.first.timestamp);
+    }
+  }
+
+  /// 构建速度切换按钮
+  Widget _buildSpeedButton(double speed) {
+    return TextButton(
+      onPressed: () {
+        // 切换速度：0.5x -> 0.75x -> 1.0x -> 1.25x -> 1.5x -> 2.0x -> 0.5x
+        const speeds = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
+        final currentIndex = speeds.indexOf(speed);
+        final nextIndex = (currentIndex + 1) % speeds.length;
+        ref.read(playbackSpeedProvider.notifier).setSpeed(speeds[nextIndex]);
+      },
+      child: Text('${speed}x'),
+    );
+  }
+
+  // ==================== AppBar ====================
 
   /// 构建 AppBar
   PreferredSizeWidget _buildAppBar(
@@ -278,204 +503,6 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
           ],
         ),
       ],
-    );
-  }
-
-  /// 构建会话信息卡片
-  Widget _buildSessionInfoCard(
-    ThemeData theme,
-    ColorScheme colorScheme,
-    Color accentColor,
-    List<TimelineEvent> events,
-  ) {
-    // 统计各类型事件数量
-    int photoCount = 0;
-    int videoCount = 0;
-    int noteCount = 0;
-    int bookmarkCount = 0;
-
-    for (final event in events) {
-      switch (event.type) {
-        case TimelineEventType.photo:
-          photoCount++;
-        case TimelineEventType.video:
-          videoCount++;
-        case TimelineEventType.textNote:
-          noteCount++;
-        case TimelineEventType.bookmark:
-          bookmarkCount++;
-        case TimelineEventType.audio:
-          // 录音区间事件不统计在快捷操作计数中
-          break;
-      }
-    }
-
-    // 获取会话信息（尝试从 session list provider 获取）
-    final sessionList = ref.watch(sessionListProvider);
-    final session = sessionList.valueOrNull
-        ?.where((s) => s.sessionId == widget.sessionId)
-        .firstOrNull;
-
-    final title = session?.title ?? '回放';
-    final createdAt = session?.createdAt ?? DateTime.now();
-    final duration = session?.duration ?? 0;
-    final audioDuration = session?.audioDuration ?? 0;
-
-    return Card(
-      margin: const EdgeInsets.fromLTRB(12, 8, 12, 4),
-      elevation: 0,
-      color: colorScheme.surfaceContainerLow,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-        side: BorderSide(
-          color: colorScheme.outlineVariant.withValues(alpha: 0.3),
-        ),
-      ),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(12),
-        onTap: () {
-          setState(() => _isInfoExpanded = !_isInfoExpanded);
-        },
-        child: Padding(
-          padding: const EdgeInsets.all(12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // 标题行
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      title,
-                      style: theme.textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.bold,
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                  Icon(
-                    _isInfoExpanded
-                        ? Icons.expand_less
-                        : Icons.expand_more,
-                    size: 20,
-                    color: colorScheme.onSurface.withValues(alpha: 0.5),
-                  ),
-                ],
-              ),
-
-              // 副标题行（始终显示）
-              const SizedBox(height: 4),
-              Row(
-                children: [
-                  Icon(
-                    Icons.access_time,
-                    size: 14,
-                    color: colorScheme.onSurface.withValues(alpha: 0.5),
-                  ),
-                  const SizedBox(width: 4),
-                  Text(
-                    DateFormatUtil.formatDateTime(createdAt),
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: colorScheme.onSurface.withValues(alpha: 0.6),
-                    ),
-                  ),
-                  const SizedBox(width: 16),
-                  Icon(
-                    Icons.timer_outlined,
-                    size: 14,
-                    color: colorScheme.onSurface.withValues(alpha: 0.5),
-                  ),
-                  const SizedBox(width: 4),
-                  Text(
-                    DateFormatUtil.formatDuration(duration),
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: colorScheme.onSurface.withValues(alpha: 0.6),
-                    ),
-                  ),
-                ],
-              ),
-
-              // 展开内容
-              if (_isInfoExpanded) ...[
-                const SizedBox(height: 8),
-                const Divider(height: 1),
-                const SizedBox(height: 8),
-
-                // 录音时长
-                if (audioDuration > 0)
-                  Row(
-                    children: [
-                      Icon(
-                        Icons.mic,
-                        size: 14,
-                        color: accentColor.withValues(alpha: 0.7),
-                      ),
-                      const SizedBox(width: 4),
-                      Text(
-                        '录音时长: ${DateFormatUtil.formatDuration(audioDuration)}',
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: colorScheme.onSurface.withValues(alpha: 0.6),
-                        ),
-                      ),
-                    ],
-                  ),
-
-                const SizedBox(height: 8),
-
-                // 事件统计
-                Row(
-                  children: [
-                    if (photoCount > 0) ...[
-                      _buildStatChip('📷', photoCount.toString()),
-                      const SizedBox(width: 8),
-                    ],
-                    if (videoCount > 0) ...[
-                      _buildStatChip('🎬', videoCount.toString()),
-                      const SizedBox(width: 8),
-                    ],
-                    if (noteCount > 0) ...[
-                      _buildStatChip('📝', noteCount.toString()),
-                      const SizedBox(width: 8),
-                    ],
-                    if (bookmarkCount > 0) ...[
-                      _buildStatChip('🔖', bookmarkCount.toString()),
-                      const SizedBox(width: 8),
-                    ],
-                    if (events.isEmpty)
-                      Text(
-                        '暂无事件',
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: colorScheme.onSurface.withValues(alpha: 0.4),
-                        ),
-                      ),
-                  ],
-                ),
-              ],
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  /// 构建统计标签
-  Widget _buildStatChip(String emoji, String count) {
-    final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-      decoration: BoxDecoration(
-        color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Text(
-        '$emoji $count',
-        style: theme.textTheme.bodySmall?.copyWith(
-          fontSize: 12,
-        ),
-      ),
     );
   }
 
@@ -682,6 +709,4 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
       ),
     );
   }
-
 }
-

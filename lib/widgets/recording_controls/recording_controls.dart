@@ -4,7 +4,7 @@ import '../../services/recording_service.dart';
 
 /// 录音控制按钮组
 ///
-/// 提供录音/暂停切换按钮和停止按钮。
+/// 提供录音/暂停切换按钮。
 /// 根据当前录音状态显示不同的按钮样式。
 /// Author: GDNDZZK
 class RecordingControls extends StatelessWidget {
@@ -20,16 +20,12 @@ class RecordingControls extends StatelessWidget {
   /// 继续录音回调
   final VoidCallback onResume;
 
-  /// 停止录音回调
-  final VoidCallback onStop;
-
   const RecordingControls({
     super.key,
     required this.state,
     required this.onStart,
     required this.onPause,
     required this.onResume,
-    required this.onStop,
   });
 
   @override
@@ -39,15 +35,6 @@ class RecordingControls extends StatelessWidget {
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        // 停止按钮（录音中、暂停或总时间轴暂停时显示）
-        if (state == RecordingState.recording ||
-            state == RecordingState.paused ||
-            state == RecordingState.totalPaused)
-          Padding(
-            padding: const EdgeInsets.only(right: 24),
-            child: _StopButton(onStop: onStop),
-          ),
-
         // 主录音/暂停按钮
         _MainRecordButton(
           state: state,
@@ -170,30 +157,3 @@ class _RecordButton extends StatelessWidget {
   }
 }
 
-/// 停止按钮组件
-///
-/// 小的方形停止按钮。
-/// Author: GDNDZZK
-class _StopButton extends StatelessWidget {
-  final VoidCallback onStop;
-
-  const _StopButton({required this.onStop});
-
-  @override
-  Widget build(BuildContext context) {
-    return Tooltip(
-      message: '停止录音',
-      child: SizedBox(
-        width: 52,
-        height: 52,
-        child: FloatingActionButton(
-          onPressed: onStop,
-          backgroundColor: Colors.grey.shade700,
-          foregroundColor: Colors.white,
-          elevation: 2,
-          child: const Icon(Icons.stop, size: 28),
-        ),
-      ),
-    );
-  }
-}

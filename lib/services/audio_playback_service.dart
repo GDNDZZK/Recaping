@@ -120,8 +120,8 @@ class AudioPlaybackService {
   /// 播放
   Future<void> play() async {
     if (_state == PlaybackState.paused || _state == PlaybackState.idle) {
-      await _player.play();
       _setState(PlaybackState.playing);
+      await _player.play();
     }
   }
 

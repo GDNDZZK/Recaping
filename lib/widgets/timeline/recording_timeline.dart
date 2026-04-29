@@ -46,13 +46,25 @@ class RecordingTimeline extends StatefulWidget {
   /// 用户点击时间轴上的事件卡片时触发，由父组件处理详情展示。
   final void Function(TimelineEvent event)? onEventTap;
 
+  /// 是否为回放模式（默认 false，保持录音模式不变）
+  final bool isPlaybackMode;
+
+  /// 回放模式下的当前播放位置（毫秒）
+  final int? currentPlaybackMs;
+
+  /// 是否正在播放（回放模式使用）
+  final bool? isPlaying;
+
   const RecordingTimeline({
     super.key,
     required this.events,
-    required this.segments,
+    this.segments = const [],
     required this.totalElapsedMs,
     this.scrollController,
     this.onEventTap,
+    this.isPlaybackMode = false,
+    this.currentPlaybackMs,
+    this.isPlaying,
   });
 
   @override
@@ -278,12 +290,54 @@ class _RecordingTimelineState extends State<RecordingTimeline>
   /// 暂停段颜色（灰色）
   static const Color _pausedColor = Color(0xFF9E9E9E);
 
+  /// 从 audio 类型事件推导录音段数据（回放模式使用）
+  List<RecordingSegment> _buildSegmentsFromEvents(List<TimelineEvent> events) {
+    final audioEvents =
+        events.where((e) => e.type == TimelineEventType.audio).toList();
+    if (audioEvents.isEmpty) return [];
+
+    return audioEvents
+        .map((e) => RecordingSegment(
+              startMs: e.timestamp,
+              endMs: e.timestamp + e.audioDurationMs,
+              isRecording: true,
+            ))
+        .toList();
+  }
+
+  /// 获取有效的录音段数据
+  ///
+  /// 在回放模式下，如果未提供 segments 或 segments 为空，
+  /// 则从 audio 类型事件推导段数据。
+  List<RecordingSegment> get _effectiveSegments {
+    if (widget.segments.isNotEmpty) return widget.segments;
+    if (widget.isPlaybackMode) return _buildSegmentsFromEvents(widget.events);
+    return widget.segments;
+  }
+
+  /// 获取当前有效位置（毫秒）
+  ///
+  /// 回放模式下使用 [currentPlaybackMs]，录音模式下使用 [totalElapsedMs]。
+  int get _effectivePositionMs {
+    if (widget.isPlaybackMode && widget.currentPlaybackMs != null) {
+      return widget.currentPlaybackMs!;
+    }
+    return widget.totalElapsedMs;
+  }
+
   @override
   void didUpdateWidget(RecordingTimeline oldWidget) {
     super.didUpdateWidget(oldWidget);
-    // 总时间增加时自动滚动到底部
-    if (widget.totalElapsedMs > oldWidget.totalElapsedMs) {
+    // 录音模式：总时间增加时自动滚动到底部
+    if (!widget.isPlaybackMode &&
+        widget.totalElapsedMs > oldWidget.totalElapsedMs) {
       _scrollToBottom();
+    }
+    // 回放模式：播放位置变化时自动滚动到播放位置
+    if (widget.isPlaybackMode &&
+        widget.currentPlaybackMs != oldWidget.currentPlaybackMs &&
+        widget.isPlaying == true) {
+      _scrollToPosition(_effectivePositionMs);
     }
   }
 
@@ -307,6 +361,28 @@ class _RecordingTimelineState extends State<RecordingTimeline>
             curve: Curves.easeOut,
           );
         }
+      }
+    });
+  }
+
+  /// 滚动到指定时间位置（回放模式使用）
+  void _scrollToPosition(int ms) {
+    if (!_isFollowing) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_isFollowing) return;
+
+      final controller = widget.scrollController ?? _internalController;
+      if (controller != null && controller.hasClients) {
+        final targetY = _msToY(ms);
+        final viewportHeight = controller.position.viewportDimension;
+        final targetScroll = (targetY - viewportHeight / 2)
+            .clamp(0.0, controller.position.maxScrollExtent);
+
+        controller.animateTo(
+          targetScroll,
+          duration: const Duration(milliseconds: 200),
+          curve: Curves.easeOut,
+        );
       }
     });
   }
@@ -473,7 +549,8 @@ class _RecordingTimelineState extends State<RecordingTimeline>
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
     final totalMs = widget.totalElapsedMs;
-    final hasSegments = widget.segments.isNotEmpty;
+    final effectiveSegments = _effectiveSegments;
+    final hasSegments = effectiveSegments.isNotEmpty;
 
     // 直接管理缩放，不使用 ZoomableTimeline 包装器
     // （因为 ZoomableTimeline 的 initialZoomLevel 仅在初始化时生效，
@@ -483,7 +560,7 @@ class _RecordingTimelineState extends State<RecordingTimeline>
     }
     return Stack(
       children: [
-        _buildTimelineContent(theme, colorScheme, totalMs),
+        _buildTimelineContent(theme, colorScheme, totalMs, effectiveSegments),
         // 点击仪表盘外部关闭
         if (_showZoomGauge)
           Positioned.fill(
@@ -536,6 +613,7 @@ class _RecordingTimelineState extends State<RecordingTimeline>
     ThemeData theme,
     ColorScheme colorScheme,
     int totalMs,
+    List<RecordingSegment> effectiveSegments,
   ) {
     // 计算总高度：基于总时间 + 底部额外空间
     final contentHeight = totalMs > 0 ? _msToY(totalMs) + 100.0 : 100.0;
@@ -567,10 +645,10 @@ class _RecordingTimelineState extends State<RecordingTimeline>
               ..._buildTickMarks(theme, totalMs),
 
               // 3. 时间轴线段（红色/灰色）
-              ..._buildTimelineSegments(theme, totalMs),
+              ..._buildTimelineSegments(theme, totalMs, effectiveSegments),
 
               // 4. 段边界圆点
-              ..._buildSegmentDots(),
+              ..._buildSegmentDots(effectiveSegments),
 
               // 5. 事件连接线（从时间轴线到事件标记）
               ..._buildEventConnectors(theme),
@@ -578,8 +656,9 @@ class _RecordingTimelineState extends State<RecordingTimeline>
               // 6. 事件标记卡片
               ..._buildEventMarkers(theme, colorScheme),
 
-              // 7. 当前位置指示器
-              if (totalMs > 0) _buildCurrentPositionIndicator(totalMs),
+              // 7. 当前位置指示器（回放模式使用播放位置）
+              if (_effectivePositionMs > 0)
+                _buildCurrentPositionIndicator(_effectivePositionMs),
             ],
           ),
         ),
@@ -647,7 +726,11 @@ class _RecordingTimelineState extends State<RecordingTimeline>
   // ==================== 时间轴线段 ====================
 
   /// 构建彩色时间轴线段
-  List<Widget> _buildTimelineSegments(ThemeData theme, int totalMs) {
+  List<Widget> _buildTimelineSegments(
+    ThemeData theme,
+    int totalMs,
+    List<RecordingSegment> effectiveSegments,
+  ) {
     final widgets = <Widget>[];
 
     // 背景线（浅灰色，作为默认底色）
@@ -666,7 +749,7 @@ class _RecordingTimelineState extends State<RecordingTimeline>
     }
 
     // 彩色段（红色=录音，灰色=暂停）
-    for (final segment in widget.segments) {
+    for (final segment in effectiveSegments) {
       final startY = _msToY(segment.startMs);
       final endMs = segment.endMs ?? totalMs;
       final height = _msToY(endMs) - startY;
@@ -708,8 +791,8 @@ class _RecordingTimelineState extends State<RecordingTimeline>
   // ==================== 段边界圆点 ====================
 
   /// 构建每个段起始位置的圆点
-  List<Widget> _buildSegmentDots() {
-    return widget.segments.map((segment) {
+  List<Widget> _buildSegmentDots(List<RecordingSegment> effectiveSegments) {
+    return effectiveSegments.map((segment) {
       final y = _msToY(segment.startMs);
       final color = segment.isRecording ? _recordingColor : _pausedColor;
 

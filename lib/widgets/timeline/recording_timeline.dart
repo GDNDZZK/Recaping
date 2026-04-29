@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
@@ -36,8 +37,34 @@ class RecordingTimeline extends StatefulWidget {
   State<RecordingTimeline> createState() => _RecordingTimelineState();
 }
 
-class _RecordingTimelineState extends State<RecordingTimeline> {
+class _RecordingTimelineState extends State<RecordingTimeline>
+    with SingleTickerProviderStateMixin {
   ScrollController? _internalController;
+
+  // ===== 动画 =====
+
+  /// 仪表盘弹出/关闭动画控制器
+  late final AnimationController _gaugeAnimController;
+
+  @override
+  void initState() {
+    super.initState();
+    _internalController = widget.scrollController ?? ScrollController();
+    _gaugeAnimController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 200),
+    );
+  }
+
+  @override
+  void dispose() {
+    _gaugeAnimController.dispose();
+    // 仅释放内部创建的控制器
+    if (_internalController != null && widget.scrollController == null) {
+      _internalController!.dispose();
+    }
+    super.dispose();
+  }
 
   // ===== 连续缩放常量 =====
 
@@ -53,6 +80,9 @@ class _RecordingTimelineState extends State<RecordingTimeline> {
   /// 当前每毫秒对应的像素数（连续值）
   double _pixelsPerMs = _maxPixelsPerMs; // 初始为最宽松
 
+  /// 是否显示扇形仪表盘
+  bool _showZoomGauge = false;
+
   /// 是否已达到最紧凑（无法继续放大）
   bool get _canZoomIn => _pixelsPerMs > _minPixelsPerMs;
 
@@ -63,7 +93,8 @@ class _RecordingTimelineState extends State<RecordingTimeline> {
   void _zoomIn() {
     if (!_canZoomIn) return;
     setState(() {
-      _pixelsPerMs = (_pixelsPerMs / _zoomFactor).clamp(_minPixelsPerMs, _maxPixelsPerMs);
+      _pixelsPerMs =
+          (_pixelsPerMs / _zoomFactor).clamp(_minPixelsPerMs, _maxPixelsPerMs);
     });
   }
 
@@ -71,12 +102,100 @@ class _RecordingTimelineState extends State<RecordingTimeline> {
   void _zoomOut() {
     if (!_canZoomOut) return;
     setState(() {
-      _pixelsPerMs = (_pixelsPerMs * _zoomFactor).clamp(_minPixelsPerMs, _maxPixelsPerMs);
+      _pixelsPerMs =
+          (_pixelsPerMs * _zoomFactor).clamp(_minPixelsPerMs, _maxPixelsPerMs);
     });
   }
 
   /// 当前缩放倍率（1x = 最宽松，最大 512x）
   int get _zoomRatio => (_maxPixelsPerMs / _pixelsPerMs).round();
+
+  // ===== 扇形仪表盘 =====
+
+  /// 仪表盘尺寸
+  static const double _gaugeWidth = 180.0;
+  static const double _gaugeHeight = 130.0;
+
+  /// 弧线圆心（在仪表盘局部坐标系中）
+  static const double _gaugeCenterX = 160.0;
+  static const double _gaugeCenterY = 115.0;
+
+  /// 当前仪表盘值（0.0 = 1x, 1.0 = 512x）
+  double get _gaugeValue {
+    final zoomRatio = _maxPixelsPerMs / _pixelsPerMs;
+    return math.log(math.max(1, zoomRatio)) / math.log(2) / 9;
+  }
+
+  /// 切换扇形仪表盘显示
+  void _toggleZoomGauge() {
+    setState(() {
+      _showZoomGauge = !_showZoomGauge;
+    });
+    if (_showZoomGauge) {
+      _gaugeAnimController.forward();
+    } else {
+      _gaugeAnimController.reverse();
+    }
+  }
+
+  /// 关闭扇形仪表盘
+  void _closeZoomGauge() {
+    if (!_showZoomGauge) return;
+    setState(() {
+      _showZoomGauge = false;
+    });
+    _gaugeAnimController.reverse();
+  }
+
+  /// 处理仪表盘拖动开始
+  void _handleGaugePanStart(DragStartDetails details) {
+    _updateGaugeFromPosition(details.localPosition);
+  }
+
+  /// 处理仪表盘拖动更新
+  void _handleGaugePanUpdate(DragUpdateDetails details) {
+    _updateGaugeFromPosition(details.localPosition);
+  }
+
+  /// 处理仪表盘点击
+  void _handleGaugeTap(TapUpDetails details) {
+    _updateGaugeFromPosition(details.localPosition);
+  }
+
+  /// 根据触摸位置更新缩放值
+  ///
+  /// 仪表盘是四分之一圆弧，从左侧（1x）到上方（512x）。
+  /// 圆心在右下角，弧线向左上方展开。
+  void _updateGaugeFromPosition(Offset localPosition) {
+    final dx = localPosition.dx - _gaugeCenterX;
+    final dy = localPosition.dy - _gaugeCenterY;
+
+    // 计算角度（屏幕坐标系：左 = π/-π，上 = -π/2）
+    // 弧线范围：[-π, -π/2]（左上象限）
+    var angle = math.atan2(dy, dx);
+
+    // 处理超出弧线范围的触摸位置
+    if (dy >= 0) {
+      // 圆心下方：映射到 1x（左端）
+      angle = -math.pi;
+    } else if (dx >= 0) {
+      // 圆心右上方：映射到 512x（上端）
+      angle = -math.pi / 2;
+    }
+    // 左上象限：angle 已在 (-π, -π/2) 范围内
+
+    // 钳制到弧线范围 [-π, -π/2]
+    angle = angle.clamp(-math.pi, -math.pi / 2);
+
+    // 映射到缩放值（对数刻度）：angle=-π → 0 (1x), angle=-π/2 → 1 (512x)
+    final ratio = (angle + math.pi) / (math.pi / 2);
+    final zoomRatio = math.pow(2, ratio * 9).toDouble();
+
+    setState(() {
+      _pixelsPerMs =
+          (_maxPixelsPerMs / zoomRatio).clamp(_minPixelsPerMs, _maxPixelsPerMs);
+    });
+  }
 
   // ===== 布局常量 =====
 
@@ -102,12 +221,6 @@ class _RecordingTimelineState extends State<RecordingTimeline> {
 
   /// 暂停段颜色（红色）
   static const Color _pausedColor = Color(0xFFE57373);
-
-  @override
-  void initState() {
-    super.initState();
-    _internalController = widget.scrollController ?? ScrollController();
-  }
 
   @override
   void didUpdateWidget(RecordingTimeline oldWidget) {
@@ -140,15 +253,6 @@ class _RecordingTimelineState extends State<RecordingTimeline> {
         }
       }
     });
-  }
-
-  @override
-  void dispose() {
-    // 仅释放内部创建的控制器
-    if (_internalController != null && widget.scrollController == null) {
-      _internalController!.dispose();
-    }
-    super.dispose();
   }
 
   /// 过滤掉 audio 类型的事件（录音信息已在时间轴段中显示）
@@ -199,8 +303,20 @@ class _RecordingTimelineState extends State<RecordingTimeline> {
     return Stack(
       children: [
         _buildTimelineContent(theme, colorScheme, totalMs),
+        // 点击仪表盘外部关闭
+        if (_showZoomGauge)
+          Positioned.fill(
+            child: GestureDetector(
+              onTap: _closeZoomGauge,
+              behavior: HitTestBehavior.translucent,
+              child: const SizedBox.expand(),
+            ),
+          ),
         // 浮动缩放按钮
         _buildFloatingZoomButtons(theme, colorScheme),
+        // 扇形仪表盘（带动画）
+        if (_showZoomGauge || _gaugeAnimController.isAnimating)
+          _buildAnimatedZoomGauge(theme, colorScheme),
       ],
     );
   }
@@ -619,7 +735,8 @@ class _RecordingTimelineState extends State<RecordingTimeline> {
           shape: BoxShape.circle,
           boxShadow: [
             BoxShadow(
-              color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.4),
+              color:
+                  Theme.of(context).colorScheme.primary.withValues(alpha: 0.4),
               blurRadius: 6,
               spreadRadius: 2,
             ),
@@ -662,14 +779,22 @@ class _RecordingTimelineState extends State<RecordingTimeline> {
               theme: theme,
               colorScheme: colorScheme,
             ),
-            // 当前缩放倍率指示
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-              child: Text(
-                '${_zoomRatio}x',
-                style: theme.textTheme.labelSmall?.copyWith(
-                  fontSize: 9,
-                  color: colorScheme.onSurface.withValues(alpha: 0.6),
+            // 当前缩放倍率指示（可点击弹出仪表盘）
+            GestureDetector(
+              onTap: _toggleZoomGauge,
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                child: Text(
+                  '${_zoomRatio}x',
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    fontSize: 9,
+                    color: _showZoomGauge
+                        ? colorScheme.primary
+                        : colorScheme.onSurface.withValues(alpha: 0.6),
+                    fontWeight:
+                        _showZoomGauge ? FontWeight.bold : FontWeight.normal,
+                  ),
                 ),
               ),
             ),
@@ -709,6 +834,55 @@ class _RecordingTimelineState extends State<RecordingTimeline> {
           padding: EdgeInsets.zero,
         ),
         tooltip: tooltip,
+      ),
+    );
+  }
+
+  // ==================== 扇形仪表盘 ====================
+
+  /// 构建带动画的扇形仪表盘
+  Widget _buildAnimatedZoomGauge(ThemeData theme, ColorScheme colorScheme) {
+    return Positioned(
+      right: 12,
+      bottom: 100,
+      child: AnimatedBuilder(
+        animation: _gaugeAnimController,
+        builder: (context, child) {
+          return Transform.scale(
+            scale: 0.5 + 0.5 * _gaugeAnimController.value,
+            alignment: Alignment.bottomRight,
+            child: Opacity(
+              opacity: _gaugeAnimController.value,
+              child: child,
+            ),
+          );
+        },
+        child: _buildZoomGaugeContent(theme, colorScheme),
+      ),
+    );
+  }
+
+  /// 构建扇形仪表盘内容
+  Widget _buildZoomGaugeContent(ThemeData theme, ColorScheme colorScheme) {
+    return SizedBox(
+      width: _gaugeWidth,
+      height: _gaugeHeight,
+      child: GestureDetector(
+        onPanStart: _handleGaugePanStart,
+        onPanUpdate: _handleGaugePanUpdate,
+        onTapUp: _handleGaugeTap,
+        child: CustomPaint(
+          size: const Size(_gaugeWidth, _gaugeHeight),
+          painter: _FanGaugePainter(
+            value: _gaugeValue,
+            currentLabel: '${_zoomRatio}x',
+            primaryColor: colorScheme.primary,
+            trackColor: colorScheme.outlineVariant.withValues(alpha: 0.3),
+            thumbColor: colorScheme.primary,
+            textColor: colorScheme.onSurface,
+            surfaceColor: colorScheme.surface,
+          ),
+        ),
       ),
     );
   }
@@ -778,5 +952,195 @@ class _RecordingTimelineState extends State<RecordingTimeline> {
     } catch (_) {
       return const Color(0xFFFF6B6B);
     }
+  }
+}
+
+// ==================== 扇形仪表盘绘制器 ====================
+
+/// 缩放扇形仪表盘自定义绘制器
+///
+/// 绘制四分之一圆弧仪表盘，从左侧（1x）到上方（512x）。
+/// 圆心在右下角，弧线向左上方展开。
+/// Author: GDNDZZK
+class _FanGaugePainter extends CustomPainter {
+  /// 当前值（0.0 = 1x 最宽松，1.0 = 512x 最紧凑）
+  final double value;
+
+  /// 当前缩放标签文字
+  final String currentLabel;
+
+  /// 主题色（活跃弧线和滑块）
+  final Color primaryColor;
+
+  /// 轨道颜色（背景弧线）
+  final Color trackColor;
+
+  /// 滑块颜色
+  final Color thumbColor;
+
+  /// 文字颜色
+  final Color textColor;
+
+  /// 表面颜色（滑块内圈）
+  final Color surfaceColor;
+
+  _FanGaugePainter({
+    required this.value,
+    required this.currentLabel,
+    required this.primaryColor,
+    required this.trackColor,
+    required this.thumbColor,
+    required this.textColor,
+    required this.surfaceColor,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    const centerX = 160.0;
+    const centerY = 115.0;
+    const radius = 85.0;
+    const strokeWidth = 10.0;
+
+    final arcRect = Rect.fromCircle(
+      center: const Offset(centerX, centerY),
+      radius: radius,
+    );
+
+    // 1. 绘制背景弧线
+    // 四分之一圆弧：从左侧（π）顺时针到上方（3π/2 = -π/2）
+    final trackPaint = Paint()
+      ..color = trackColor
+      ..strokeWidth = strokeWidth
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+    canvas.drawArc(arcRect, math.pi, math.pi / 2, false, trackPaint);
+
+    // 2. 绘制活跃弧线（从左侧 1x 到当前位置）
+    if (value > 0.001) {
+      final activePaint = Paint()
+        ..color = primaryColor
+        ..strokeWidth = strokeWidth
+        ..style = PaintingStyle.stroke
+        ..strokeCap = StrokeCap.round;
+
+      // 从左侧（π）顺时针扫过 value * π/2
+      canvas.drawArc(arcRect, math.pi, value * math.pi / 2, false, activePaint);
+    }
+
+    // 3. 绘制刻度标记
+    final tickPaint = Paint()
+      ..color = textColor.withValues(alpha: 0.25)
+      ..strokeWidth = 1.5
+      ..style = PaintingStyle.stroke;
+
+    // 在每个 2 的幂次位置绘制刻度：1x, 2x, 4x, ..., 512x
+    for (int i = 0; i <= 9; i++) {
+      final ratio = i / 9;
+      // 角度从 π（左侧 1x）到 3π/2（上方 512x）
+      final angle = math.pi + ratio * math.pi / 2;
+      final x = centerX + radius * math.cos(angle);
+      final y = centerY + radius * math.sin(angle);
+
+      // 刻度线方向：从弧线向外延伸
+      final tickLength = (i % 3 == 0) ? 10.0 : 5.0;
+      final nx = math.cos(angle);
+      final ny = math.sin(angle);
+
+      canvas.drawLine(
+        Offset(x, y),
+        Offset(x + nx * tickLength, y + ny * tickLength),
+        tickPaint,
+      );
+    }
+
+    // 4. 绘制滑块（圆形指示器）
+    final thumbAngle = math.pi + value * math.pi / 2;
+    final thumbX = centerX + radius * math.cos(thumbAngle);
+    final thumbY = centerY + radius * math.sin(thumbAngle);
+
+    // 发光效果
+    final glowPaint = Paint()
+      ..color = thumbColor.withValues(alpha: 0.3)
+      ..style = PaintingStyle.fill;
+    canvas.drawCircle(Offset(thumbX, thumbY), 16, glowPaint);
+
+    // 滑块主体
+    final thumbPaint = Paint()
+      ..color = thumbColor
+      ..style = PaintingStyle.fill;
+    canvas.drawCircle(Offset(thumbX, thumbY), 10, thumbPaint);
+
+    // 滑块内圈
+    final innerPaint = Paint()
+      ..color = surfaceColor
+      ..style = PaintingStyle.fill;
+    canvas.drawCircle(Offset(thumbX, thumbY), 5, innerPaint);
+
+    // 5. 绘制标签
+    // 左端标签 "1x"
+    _drawLabel(
+      canvas,
+      '1x',
+      centerX - radius - 16,
+      centerY,
+      textColor.withValues(alpha: 0.5),
+      10,
+    );
+
+    // 上方标签 "512x"
+    _drawLabel(
+      canvas,
+      '512x',
+      centerX,
+      centerY - radius - 16,
+      textColor.withValues(alpha: 0.5),
+      10,
+    );
+
+    // 当前值标签（在滑块附近）
+    // 根据滑块位置调整标签偏移，避免与弧线重叠
+    final labelOffsetX = thumbX + (thumbX < centerX ? -20.0 : 20.0);
+    final labelOffsetY = thumbY + (thumbY < centerY ? -20.0 : 20.0);
+    _drawLabel(
+      canvas,
+      currentLabel,
+      labelOffsetX,
+      labelOffsetY,
+      primaryColor,
+      13,
+    );
+  }
+
+  /// 在指定位置绘制居中文字
+  void _drawLabel(
+    Canvas canvas,
+    String text,
+    double x,
+    double y,
+    Color color,
+    double fontSize,
+  ) {
+    final textSpan = TextSpan(
+      text: text,
+      style: TextStyle(
+        color: color,
+        fontSize: fontSize,
+        fontWeight: FontWeight.bold,
+      ),
+    );
+    final textPainter = TextPainter(
+      text: textSpan,
+      textDirection: TextDirection.ltr,
+    );
+    textPainter.layout();
+    textPainter.paint(
+      canvas,
+      Offset(x - textPainter.width / 2, y - textPainter.height / 2),
+    );
+  }
+
+  @override
+  bool shouldRepaint(_FanGaugePainter oldDelegate) {
+    return value != oldDelegate.value || currentLabel != oldDelegate.currentLabel;
   }
 }

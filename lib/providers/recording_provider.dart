@@ -218,7 +218,27 @@ final timelineEventsProvider =
 class RecordingControlNotifier extends StateNotifier<AsyncValue<void>> {
   final Ref _ref;
 
+  /// 上次操作时间，用于防抖
+  DateTime? _lastOperationTime;
+
+  /// 最小操作间隔（防抖时间）
+  static const _minOperationInterval = Duration(milliseconds: 500);
+
   RecordingControlNotifier(this._ref) : super(const AsyncValue.data(null));
+
+  /// 防抖检查
+  ///
+  /// 如果距离上次操作时间小于 [_minOperationInterval]，返回 false 表示应跳过本次操作。
+  /// 否则更新 [_lastOperationTime] 并返回 true。
+  bool _checkDebounce() {
+    final now = DateTime.now();
+    if (_lastOperationTime != null &&
+        now.difference(_lastOperationTime!) < _minOperationInterval) {
+      return false;
+    }
+    _lastOperationTime = now;
+    return true;
+  }
 
   /// 开始新的录音会话
   ///
@@ -266,6 +286,9 @@ class RecordingControlNotifier extends StateNotifier<AsyncValue<void>> {
   /// 关闭当前录音段，添加暂停段。
   Future<void> pauseRecording() async {
     try {
+      // 防抖：快速连续点击时跳过
+      if (!_checkDebounce()) return;
+
       final recordingService = _ref.read(recordingServiceProvider);
       final currentMs = recordingService.totalElapsedMs;
       
@@ -283,6 +306,9 @@ class RecordingControlNotifier extends StateNotifier<AsyncValue<void>> {
   /// 关闭当前暂停段，添加新的录音段。
   Future<void> resumeRecording() async {
     try {
+      // 防抖：快速连续点击时跳过
+      if (!_checkDebounce()) return;
+
       final recordingService = _ref.read(recordingServiceProvider);
       final currentMs = recordingService.totalElapsedMs;
       

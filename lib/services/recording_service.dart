@@ -147,6 +147,11 @@ class RecordingService {
   Timer? _tickTimer;
   Timer? _chunkTimer;
 
+  // ==================== 操作锁 ====================
+
+  /// 操作锁，防止暂停/继续/轮转等异步操作并发执行
+  Completer<void>? _operationLock;
+
   // ==================== 流控制器 ====================
 
   final _stateController = StreamController<RecordingState>.broadcast();
@@ -255,31 +260,55 @@ class RecordingService {
   Future<void> pauseRecording() async {
     if (_state != RecordingState.recording) return;
 
-    // 停止当前分片并保存
-    await _stopAndSaveCurrentChunk();
-    _chunkTimer?.cancel();
+    // 等待之前的操作完成
+    await _waitForOperation();
+    if (_state != RecordingState.recording) return;
 
-    // 暂停录音器
-    await _recorder.pause();
+    // 获取操作锁
+    _operationLock = Completer<void>();
+    try {
+      // 停止当前分片并保存
+      await _stopAndSaveCurrentChunk();
+      _chunkTimer?.cancel();
 
-    _setState(RecordingState.paused);
+      // 暂停录音器
+      await _recorder.pause();
+
+      _setState(RecordingState.paused);
+    } finally {
+      final lock = _operationLock;
+      _operationLock = null;
+      if (lock != null && !lock.isCompleted) lock.complete();
+    }
   }
 
   /// 继续录音
   Future<void> resumeRecording() async {
     if (_state != RecordingState.paused) return;
 
-    // 递增分片序号，创建新的音频分片
-    _chunkIndex++;
-    _audioChunkStartMs = _audioElapsedMs;
+    // 等待之前的操作完成
+    await _waitForOperation();
+    if (_state != RecordingState.paused) return;
 
-    // 开始新的录音分片
-    await _startRecordingChunk();
+    // 获取操作锁
+    _operationLock = Completer<void>();
+    try {
+      // 递增分片序号，创建新的音频分片
+      _chunkIndex++;
+      _audioChunkStartMs = _audioElapsedMs;
 
-    // 重新启动自动分段计时器
-    _startChunkTimer();
+      // 开始新的录音分片
+      await _startRecordingChunk();
 
-    _setState(RecordingState.recording);
+      // 重新启动自动分段计时器
+      _startChunkTimer();
+
+      _setState(RecordingState.recording);
+    } finally {
+      final lock = _operationLock;
+      _operationLock = null;
+      if (lock != null && !lock.isCompleted) lock.complete();
+    }
   }
 
   /// 暂停总时间轴
@@ -290,6 +319,12 @@ class RecordingService {
   /// **重要**：必须先取消计时器再执行异步操作，否则在异步操作（文件 I/O）
   /// 期间计时器会继续更新 [__totalElapsedMs]，导致时间跳跃。
   Future<void> pauseTotalTimeline() async {
+    if (_state != RecordingState.recording && _state != RecordingState.paused) {
+      return;
+    }
+
+    // 等待之前的操作完成
+    await _waitForOperation();
     if (_state != RecordingState.recording && _state != RecordingState.paused) {
       return;
     }
@@ -306,9 +341,16 @@ class RecordingService {
 
     // 如果正在录音，先暂停录音
     if (_state == RecordingState.recording) {
-      await _stopAndSaveCurrentChunk();
-      _chunkTimer?.cancel();
-      await _recorder.pause();
+      _operationLock = Completer<void>();
+      try {
+        await _stopAndSaveCurrentChunk();
+        _chunkTimer?.cancel();
+        await _recorder.pause();
+      } finally {
+        final lock = _operationLock;
+        _operationLock = null;
+        if (lock != null && !lock.isCompleted) lock.complete();
+      }
     }
 
     _setState(RecordingState.totalPaused);
@@ -350,6 +392,9 @@ class RecordingService {
   Future<void> stopSession() async {
     if (_state == RecordingState.idle) return;
 
+    // 等待之前的操作完成
+    await _waitForOperation();
+
     if (_state == RecordingState.recording) {
       // 保存当前正在录音的分片（内部会调用 _recorder.stop()）
       await _stopAndSaveCurrentChunk();
@@ -390,6 +435,20 @@ class RecordingService {
   }
 
   // ==================== 私有方法 ====================
+
+  /// 等待当前操作锁释放
+  ///
+  /// 如果有操作正在执行（[_operationLock] 不为 null 且未完成），
+  /// 会等待其完成后再返回。
+  Future<void> _waitForOperation() async {
+    while (_operationLock != null) {
+      try {
+        await _operationLock!.future;
+      } catch (_) {
+        // 操作出错时锁也会被释放，继续执行
+      }
+    }
+  }
 
   /// 更新录音状态并通知监听者
   void _setState(RecordingState newState) {
@@ -477,10 +536,22 @@ class RecordingService {
 
   /// 轮转分片：停止当前分片，保存数据，开始新分片
   Future<void> _rotateChunk() async {
-    await _stopAndSaveCurrentChunk();
-    _chunkIndex++;
-    _audioChunkStartMs = _audioElapsedMs;
-    await _startRecordingChunk();
+    // 等待之前的操作完成
+    await _waitForOperation();
+    if (_state != RecordingState.recording) return;
+
+    // 获取操作锁
+    _operationLock = Completer<void>();
+    try {
+      await _stopAndSaveCurrentChunk();
+      _chunkIndex++;
+      _audioChunkStartMs = _audioElapsedMs;
+      await _startRecordingChunk();
+    } finally {
+      final lock = _operationLock;
+      _operationLock = null;
+      if (lock != null && !lock.isCompleted) lock.complete();
+    }
   }
 
   /// 开始录音到新的临时文件
@@ -538,21 +609,37 @@ class RecordingService {
   Future<void> _stopAndSaveCurrentChunk() async {
     if (_currentChunkFilePath == null) return;
 
+    // 立即清空文件路径，防止重复处理
+    _currentChunkFilePath = null;
+
     // 停止振幅监听
     _stopAmplitudeListening();
 
     // 停止录音，获取输出文件路径
-    final outputPath = await _recorder.stop();
+    String? outputPath;
+    try {
+      outputPath = await _recorder.stop();
+    } catch (_) {
+      // 录音器可能已停止，忽略错误
+      return;
+    }
     if (outputPath == null) return;
 
     final file = File(outputPath);
-    if (!await file.exists()) return;
+    if (!await file.exists()) {
+      // 文件不存在（可能已被移动或删除），跳过
+      return;
+    }
 
     // 检查文件大小
     final fileSize = await file.length();
     if (fileSize == 0) {
       // 空数据，删除临时文件
-      await file.delete();
+      try {
+        await file.delete();
+      } catch (_) {
+        // 忽略删除失败
+      }
       return;
     }
 
@@ -571,8 +658,29 @@ class RecordingService {
         await dir.create(recursive: true);
       }
 
+      // 检查目标文件是否已存在，如果存在则先删除
+      final targetFile = File(absolutePath);
+      if (await targetFile.exists()) {
+        try {
+          await targetFile.delete();
+        } catch (_) {
+          // 忽略删除失败
+        }
+      }
+
       // 移动文件到会话目录
-      await file.rename(absolutePath);
+      try {
+        await file.rename(absolutePath);
+      } catch (_) {
+        // rename 可能因跨设备失败，尝试 copy + delete
+        try {
+          await file.copy(absolutePath);
+          await file.delete();
+        } catch (_) {
+          // 文件操作失败，记录但不中断流程
+          return;
+        }
+      }
 
       // 创建 AudioChunk 并保存到数据库（只存路径引用）
       final chunk = AudioChunk(
@@ -595,7 +703,5 @@ class RecordingService {
         // 忽略临时文件删除失败
       }
     }
-
-    _currentChunkFilePath = null;
   }
 }

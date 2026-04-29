@@ -165,6 +165,36 @@ class TimelineEventsNotifier extends StateNotifier<List<TimelineEvent>> {
     await refresh();
   }
 
+  /// 根据 ID 获取照片
+  Future<Photo?> getPhotoById(String id) async {
+    if (_timelineService == null) return null;
+    return _timelineService!.getPhotoById(id);
+  }
+
+  /// 根据 ID 获取视频分片
+  Future<VideoChunk?> getVideoChunkById(String id) async {
+    if (_timelineService == null) return null;
+    return _timelineService!.getVideoChunkById(id);
+  }
+
+  /// 更新照片
+  ///
+  /// 通过 [TimelineService] 更新照片标题后自动刷新事件列表。
+  Future<void> updatePhoto(Photo photo) async {
+    if (_timelineService == null) return;
+    await _timelineService!.updatePhoto(photo);
+    await refresh();
+  }
+
+  /// 更新视频分片
+  ///
+  /// 通过 [TimelineService] 更新视频标题后自动刷新事件列表。
+  Future<void> updateVideoChunk(VideoChunk chunk) async {
+    if (_timelineService == null) return;
+    await _timelineService!.updateVideoChunk(chunk);
+    await refresh();
+  }
+
   /// 更新文字笔记
   ///
   /// 通过 [TimelineService] 更新笔记内容后自动刷新事件列表。

@@ -97,9 +97,10 @@ class DatabaseHelper {
 
     final database = await openDatabase(
       dbPath,
-      version: 1,
+      version: 2,
       onCreate: _onSessionCreate,
       onConfigure: _onConfigure,
+      onUpgrade: _onSessionUpgrade,
     );
 
     _databases[sessionId] = database;
@@ -201,7 +202,8 @@ class DatabaseHelper {
           end_time INTEGER NOT NULL,
           file_path TEXT NOT NULL,
           format TEXT NOT NULL DEFAULT 'mp4',
-          thumbnail_path TEXT
+          thumbnail_path TEXT,
+          title TEXT
         )
       ''');
 
@@ -214,7 +216,8 @@ class DatabaseHelper {
           thumbnail_path TEXT NOT NULL,
           format TEXT NOT NULL DEFAULT 'jpeg',
           width INTEGER NOT NULL DEFAULT 0,
-          height INTEGER NOT NULL DEFAULT 0
+          height INTEGER NOT NULL DEFAULT 0,
+          title TEXT
         )
       ''');
 
@@ -281,6 +284,16 @@ class DatabaseHelper {
         ON ai_results(task_type)
       ''');
     });
+  }
+
+  /// 会话数据库升级迁移
+  Future<void> _onSessionUpgrade(Database db, int oldVersion, int newVersion) async {
+    if (oldVersion < 2) {
+      await db.transaction((txn) async {
+        await txn.execute('ALTER TABLE photos ADD COLUMN title TEXT');
+        await txn.execute('ALTER TABLE video_chunks ADD COLUMN title TEXT');
+      });
+    }
   }
 
   /// 创建全局配置数据库表结构

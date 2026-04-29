@@ -70,6 +70,7 @@ class TimelineEvent {
     required int timestamp,
     String? thumbnailPath,
     String? mediaFilePath,
+    String? title,
   }) {
     return TimelineEvent(
       id: id,
@@ -77,6 +78,7 @@ class TimelineEvent {
       timestamp: timestamp,
       thumbnailPath: thumbnailPath,
       mediaFilePath: mediaFilePath,
+      label: title,
     );
   }
 
@@ -86,6 +88,7 @@ class TimelineEvent {
     required int timestamp,
     String? thumbnailPath,
     String? mediaFilePath,
+    String? title,
   }) {
     return TimelineEvent(
       id: id,
@@ -93,6 +96,7 @@ class TimelineEvent {
       timestamp: timestamp,
       thumbnailPath: thumbnailPath,
       mediaFilePath: mediaFilePath,
+      label: title,
     );
   }
 

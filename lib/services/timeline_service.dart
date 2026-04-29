@@ -185,6 +185,16 @@ class TimelineService {
     return note;
   }
 
+  /// 更新照片
+  Future<void> updatePhoto(Photo photo) async {
+    await _db.updatePhoto(photo);
+  }
+
+  /// 更新视频分片
+  Future<void> updateVideoChunk(VideoChunk chunk) async {
+    await _db.updateVideoChunk(chunk);
+  }
+
   /// 更新文字笔记
   Future<void> updateTextNote(TextNote note) async {
     await _db.updateTextNote(note);
@@ -226,6 +236,16 @@ class TimelineService {
   }
 
   // ==================== 查询操作 ====================
+
+  /// 根据 ID 获取照片
+  Future<Photo?> getPhotoById(String id) async {
+    return _db.getPhotoById(id);
+  }
+
+  /// 根据 ID 获取视频分片
+  Future<VideoChunk?> getVideoChunkById(String id) async {
+    return _db.getVideoChunkById(id);
+  }
 
   /// 获取所有时间轴事件（按时间戳排序）
   Future<List<TimelineEvent>> getTimelineEvents() async {

@@ -28,6 +28,9 @@ class VideoChunk {
   /// 缩略图文件相对路径（相对于会话目录，可选）
   final String? thumbnailPath;
 
+  /// 视频标题（可选）
+  final String? title;
+
   const VideoChunk({
     required this.id,
     required this.videoId,
@@ -37,6 +40,7 @@ class VideoChunk {
     required this.filePath,
     this.format = 'mp4',
     this.thumbnailPath,
+    this.title,
   });
 
   /// 从数据库 Map 创建 VideoChunk 实例
@@ -50,6 +54,7 @@ class VideoChunk {
       filePath: map['file_path'] as String,
       format: map['format'] as String? ?? 'mp4',
       thumbnailPath: map['thumbnail_path'] as String?,
+      title: map['title'] as String?,
     );
   }
 
@@ -64,6 +69,7 @@ class VideoChunk {
       'file_path': filePath,
       'format': format,
       'thumbnail_path': thumbnailPath,
+      'title': title,
     };
   }
 
@@ -77,6 +83,7 @@ class VideoChunk {
     String? filePath,
     String? format,
     String? thumbnailPath,
+    String? title,
   }) {
     return VideoChunk(
       id: id ?? this.id,
@@ -87,6 +94,7 @@ class VideoChunk {
       filePath: filePath ?? this.filePath,
       format: format ?? this.format,
       thumbnailPath: thumbnailPath ?? this.thumbnailPath,
+      title: title ?? this.title,
     );
   }
 
@@ -102,7 +110,8 @@ class VideoChunk {
         'startTime: $startTime, '
         'endTime: $endTime, '
         'filePath: $filePath, '
-        'format: $format'
+        'format: $format, '
+        'title: $title'
         ')';
   }
 }

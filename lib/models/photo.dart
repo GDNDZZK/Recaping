@@ -25,6 +25,9 @@ class Photo {
   /// 图片高度（像素）
   final int height;
 
+  /// 照片标题（可选）
+  final String? title;
+
   const Photo({
     required this.id,
     required this.timestamp,
@@ -33,6 +36,7 @@ class Photo {
     this.format = 'jpeg',
     this.width = 0,
     this.height = 0,
+    this.title,
   });
 
   /// 从数据库 Map 创建 Photo 实例
@@ -45,6 +49,7 @@ class Photo {
       format: map['format'] as String? ?? 'jpeg',
       width: map['width'] as int? ?? 0,
       height: map['height'] as int? ?? 0,
+      title: map['title'] as String?,
     );
   }
 
@@ -58,6 +63,7 @@ class Photo {
       'format': format,
       'width': width,
       'height': height,
+      'title': title,
     };
   }
 
@@ -70,6 +76,7 @@ class Photo {
     String? format,
     int? width,
     int? height,
+    String? title,
   }) {
     return Photo(
       id: id ?? this.id,
@@ -79,6 +86,7 @@ class Photo {
       format: format ?? this.format,
       width: width ?? this.width,
       height: height ?? this.height,
+      title: title ?? this.title,
     );
   }
 
@@ -90,7 +98,8 @@ class Photo {
         'filePath: $filePath, '
         'format: $format, '
         'width: $width, '
-        'height: $height'
+        'height: $height, '
+        'title: $title'
         ')';
   }
 }

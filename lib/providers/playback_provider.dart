@@ -4,8 +4,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/database/session_database.dart';
 import '../models/bookmark.dart';
+import '../models/photo.dart';
 import '../models/text_note.dart';
 import '../models/timeline_event.dart';
+import '../models/video_chunk.dart';
 import '../services/audio_playback_service.dart';
 import '../services/timeline_service.dart';
 import 'session_provider.dart';
@@ -128,6 +130,42 @@ class PlaybackEventsNotifier extends StateNotifier<AsyncValue<List<TimelineEvent
 
     final timelineService = TimelineService(db);
     await timelineService.deleteEvent(eventId, type);
+    await loadEvents(sessionId);
+  }
+
+  /// 根据 ID 获取照片
+  Future<Photo?> getPhotoById(String id) async {
+    final db = _database;
+    if (db == null) return null;
+    return db.getPhotoById(id);
+  }
+
+  /// 根据 ID 获取视频分片
+  Future<VideoChunk?> getVideoChunkById(String id) async {
+    final db = _database;
+    if (db == null) return null;
+    return db.getVideoChunkById(id);
+  }
+
+  /// 更新照片
+  Future<void> updatePhoto(Photo photo) async {
+    final db = _database;
+    final sessionId = _sessionId;
+    if (db == null || sessionId == null) return;
+
+    final timelineService = TimelineService(db);
+    await timelineService.updatePhoto(photo);
+    await loadEvents(sessionId);
+  }
+
+  /// 更新视频分片
+  Future<void> updateVideoChunk(VideoChunk chunk) async {
+    final db = _database;
+    final sessionId = _sessionId;
+    if (db == null || sessionId == null) return;
+
+    final timelineService = TimelineService(db);
+    await timelineService.updateVideoChunk(chunk);
     await loadEvents(sessionId);
   }
 

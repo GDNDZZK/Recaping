@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:open_filex/open_filex.dart';
+import 'package:share_plus/share_plus.dart';
 
 import '../../core/utils/date_format_util.dart';
 import '../../models/timeline_event.dart';
@@ -303,6 +304,43 @@ class _EventDetailPanelState extends State<EventDetailPanel> {
   /// 构建照片内容
   Widget _buildPhotoContent(ThemeData theme, ColorScheme colorScheme) {
     final imagePath = widget.event.mediaFilePath ?? widget.event.thumbnailPath;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // 标题显示（非编辑模式下）
+        if (!_isEditing && widget.event.label != null && widget.event.label!.isNotEmpty) ...[
+          Text(
+            widget.event.label!,
+            style: theme.textTheme.titleSmall?.copyWith(
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 12),
+        ],
+
+        // 图片预览
+        _buildPhotoPreview(theme, colorScheme, imagePath),
+
+        // 编辑模式下的标题输入框
+        if (_isEditing) ...[
+          const SizedBox(height: 16),
+          TextField(
+            controller: _titleController,
+            decoration: const InputDecoration(
+              labelText: '标题（可选）',
+              border: OutlineInputBorder(),
+              isDense: true,
+            ),
+            maxLength: 50,
+          ),
+        ],
+      ],
+    );
+  }
+
+  /// 构建照片预览区域
+  Widget _buildPhotoPreview(ThemeData theme, ColorScheme colorScheme, String? imagePath) {
     if (imagePath == null) {
       return _buildMediaUnavailablePlaceholder(
         theme: theme,
@@ -312,7 +350,6 @@ class _EventDetailPanelState extends State<EventDetailPanel> {
       );
     }
 
-    // 检查文件是否存在
     final file = File(imagePath);
     if (!file.existsSync()) {
       return _buildMediaUnavailablePlaceholder(
@@ -329,7 +366,7 @@ class _EventDetailPanelState extends State<EventDetailPanel> {
         showImageViewer(
           context,
           filePath: imagePath,
-          description: '照片',
+          description: widget.event.label ?? '照片',
         );
       },
       child: ClipRRect(
@@ -387,6 +424,17 @@ class _EventDetailPanelState extends State<EventDetailPanel> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        // 标题显示（非编辑模式下）
+        if (!_isEditing && widget.event.label != null && widget.event.label!.isNotEmpty) ...[
+          Text(
+            widget.event.label!,
+            style: theme.textTheme.titleSmall?.copyWith(
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 12),
+        ],
+
         // 缩略图区域或占位图标
         GestureDetector(
           onTap: hasVideoFile ? () => _openVideoFile(mediaFilePath) : null,
@@ -426,7 +474,7 @@ class _EventDetailPanelState extends State<EventDetailPanel> {
         ),
 
         // 视频文件信息和操作按钮
-        if (hasVideoFile) ...[
+        if (hasVideoFile && !_isEditing) ...[
           const SizedBox(height: 12),
           SizedBox(
             width: double.infinity,
@@ -436,13 +484,27 @@ class _EventDetailPanelState extends State<EventDetailPanel> {
               label: const Text('打开视频'),
             ),
           ),
-        ] else if (mediaFilePath != null) ...[
+        ] else if (mediaFilePath != null && !_isEditing) ...[
           const SizedBox(height: 12),
           Text(
             '视频文件不存在',
             style: theme.textTheme.bodySmall?.copyWith(
               color: colorScheme.error.withValues(alpha: 0.7),
             ),
+          ),
+        ],
+
+        // 编辑模式下的标题输入框
+        if (_isEditing) ...[
+          const SizedBox(height: 16),
+          TextField(
+            controller: _titleController,
+            decoration: const InputDecoration(
+              labelText: '标题（可选）',
+              border: OutlineInputBorder(),
+              isDense: true,
+            ),
+            maxLength: 50,
           ),
         ],
       ],
@@ -515,6 +577,41 @@ class _EventDetailPanelState extends State<EventDetailPanel> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('无法打开视频: $e'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    }
+  }
+
+  /// 导出媒体文件（照片/视频）
+  Future<void> _exportMedia() async {
+    final filePath = widget.event.mediaFilePath;
+    if (filePath == null) return;
+
+    final file = File(filePath);
+    if (!await file.exists()) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('文件不存在，无法导出'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+      return;
+    }
+
+    try {
+      await Share.shareXFiles(
+        [XFile(filePath)],
+        text: widget.event.label ?? (widget.event.type == TimelineEventType.photo ? '照片' : '视频'),
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('导出失败: $e'),
             behavior: SnackBarBehavior.floating,
           ),
         );
@@ -772,13 +869,27 @@ class _EventDetailPanelState extends State<EventDetailPanel> {
 
     // 查看模式下的按钮
     final canEdit = widget.event.type == TimelineEventType.textNote ||
-        widget.event.type == TimelineEventType.bookmark;
+        widget.event.type == TimelineEventType.bookmark ||
+        widget.event.type == TimelineEventType.photo ||
+        widget.event.type == TimelineEventType.video;
+    final canExport = widget.event.type == TimelineEventType.photo ||
+        widget.event.type == TimelineEventType.video;
     final canDelete = widget.onDelete != null;
 
     return Row(
       mainAxisAlignment: MainAxisAlignment.end,
       children: [
-        // 编辑按钮（仅笔记和书签支持）
+        // 导出按钮（仅照片和视频支持）
+        if (canExport) ...[
+          OutlinedButton.icon(
+            onPressed: _exportMedia,
+            icon: const Icon(Icons.share, size: 18),
+            label: const Text('导出'),
+          ),
+          const SizedBox(width: 8),
+        ],
+
+        // 编辑按钮
         if (canEdit && widget.onEdit != null) ...[
           OutlinedButton.icon(
             onPressed: () {
@@ -816,6 +927,15 @@ class _EventDetailPanelState extends State<EventDetailPanel> {
     TimelineEvent updatedEvent;
 
     switch (widget.event.type) {
+      case TimelineEventType.photo:
+      case TimelineEventType.video:
+        final title = _titleController.text.trim().isEmpty
+            ? null
+            : _titleController.text.trim();
+        updatedEvent = widget.event.copyWith(
+          label: title,
+        );
+
       case TimelineEventType.textNote:
         final title = _titleController.text.trim().isEmpty
             ? null
@@ -837,8 +957,8 @@ class _EventDetailPanelState extends State<EventDetailPanel> {
           color: _selectedColor,
         );
 
-      default:
-        return;
+      case TimelineEventType.audio:
+        return; // 不支持编辑
     }
 
     widget.onEdit?.call(updatedEvent);

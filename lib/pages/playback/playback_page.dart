@@ -497,7 +497,19 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
       event: event,
       onEdit: (updatedEvent) async {
         final eventsNotifier = ref.read(playbackEventsProvider.notifier);
-        if (event.type == TimelineEventType.textNote) {
+        if (event.type == TimelineEventType.photo) {
+          final photo = await eventsNotifier.getPhotoById(event.id);
+          if (photo != null) {
+            final updatedPhoto = photo.copyWith(title: updatedEvent.label);
+            await eventsNotifier.updatePhoto(updatedPhoto);
+          }
+        } else if (event.type == TimelineEventType.video) {
+          final chunk = await eventsNotifier.getVideoChunkById(event.id);
+          if (chunk != null) {
+            final updatedChunk = chunk.copyWith(title: updatedEvent.label);
+            await eventsNotifier.updateVideoChunk(updatedChunk);
+          }
+        } else if (event.type == TimelineEventType.textNote) {
           final note = TextNote(
             id: event.id,
             timestamp: event.timestamp,

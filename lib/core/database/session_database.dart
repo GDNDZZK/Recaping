@@ -168,6 +168,16 @@ class SessionDatabase {
     return results.map((map) => Photo.fromMap(map)).toList();
   }
 
+  /// 更新照片
+  Future<void> updatePhoto(Photo photo) async {
+    await _db.update(
+      'photos',
+      photo.toMap(),
+      where: 'id = ?',
+      whereArgs: [photo.id],
+    );
+  }
+
   /// 删除照片
   Future<void> deletePhoto(String id) async {
     await _db.delete('photos', where: 'id = ?', whereArgs: [id]);
@@ -198,6 +208,27 @@ class SessionDatabase {
       orderBy: 'chunk_index ASC',
     );
     return results.map((map) => VideoChunk.fromMap(map)).toList();
+  }
+
+  /// 根据 ID 获取视频分片
+  Future<VideoChunk?> getVideoChunkById(String id) async {
+    final results = await _db.query(
+      'video_chunks',
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+    if (results.isEmpty) return null;
+    return VideoChunk.fromMap(results.first);
+  }
+
+  /// 更新视频分片
+  Future<void> updateVideoChunk(VideoChunk chunk) async {
+    await _db.update(
+      'video_chunks',
+      chunk.toMap(),
+      where: 'id = ?',
+      whereArgs: [chunk.id],
+    );
   }
 
   /// 删除视频分片
@@ -349,6 +380,7 @@ class SessionDatabase {
     for (final map in photos) {
       final thumbnailPath = map['thumbnail_path'] as String?;
       final filePath = map['file_path'] as String?;
+      final title = map['title'] as String?;
       events.add(
         TimelineEvent.fromPhoto(
           id: map['id'] as String,
@@ -359,13 +391,14 @@ class SessionDatabase {
           mediaFilePath: filePath != null
               ? await resolvePath(filePath)
               : null,
+          title: title,
         ),
       );
     }
 
     // 获取视频事件（取每个 videoId 的第一个分片）
     final videoResults = await _db.rawQuery('''
-      SELECT id, start_time, thumbnail_path, file_path
+      SELECT id, start_time, thumbnail_path, file_path, title
       FROM video_chunks
       WHERE chunk_index = (
         SELECT MIN(chunk_index)
@@ -377,6 +410,7 @@ class SessionDatabase {
     for (final map in videoResults) {
       final thumbnailPath = map['thumbnail_path'] as String?;
       final filePath = map['file_path'] as String?;
+      final title = map['title'] as String?;
       events.add(
         TimelineEvent.fromVideo(
           id: map['id'] as String,
@@ -387,6 +421,7 @@ class SessionDatabase {
           mediaFilePath: filePath != null
               ? await resolvePath(filePath)
               : null,
+          title: title,
         ),
       );
     }
@@ -457,6 +492,7 @@ class SessionDatabase {
     for (final map in photos) {
       final thumbnailPath = map['thumbnail_path'] as String?;
       final filePath = map['file_path'] as String?;
+      final title = map['title'] as String?;
       events.add(
         TimelineEvent.fromPhoto(
           id: map['id'] as String,
@@ -467,6 +503,7 @@ class SessionDatabase {
           mediaFilePath: filePath != null
               ? await resolvePath(filePath)
               : null,
+          title: title,
         ),
       );
     }
@@ -481,6 +518,7 @@ class SessionDatabase {
     for (final map in videos) {
       final thumbnailPath = map['thumbnail_path'] as String?;
       final filePath = map['file_path'] as String?;
+      final title = map['title'] as String?;
       events.add(
         TimelineEvent.fromVideo(
           id: map['id'] as String,
@@ -491,6 +529,7 @@ class SessionDatabase {
           mediaFilePath: filePath != null
               ? await resolvePath(filePath)
               : null,
+          title: title,
         ),
       );
     }

@@ -127,6 +127,9 @@ class RecordingService {
   /// 当前录音分片开始时相对于录音时间轴的时间（毫秒）
   int _audioChunkStartMs = 0;
 
+  /// 当前录音分片开始时相对于总时间轴的时间（毫秒）
+  int _chunkTotalStartMs = 0;
+
   /// 当前分片序号
   int _chunkIndex = 0;
 
@@ -239,6 +242,7 @@ class RecordingService {
     _audioElapsedMs = 0;
     _chunkIndex = 0;
     _audioChunkStartMs = 0;
+    _chunkTotalStartMs = 0;
     _totalElapsedBeforePause = 0;
     _totalTimelineBase = null;
     _stateBeforeTotalPause = null;
@@ -296,6 +300,7 @@ class RecordingService {
       // 递增分片序号，创建新的音频分片
       _chunkIndex++;
       _audioChunkStartMs = _audioElapsedMs;
+      _chunkTotalStartMs = _totalElapsedMs;
 
       // 开始新的录音分片
       await _startRecordingChunk();
@@ -374,6 +379,7 @@ class RecordingService {
     if (wasRecording) {
       // 之前是录音中，恢复录音
       _audioChunkStartMs = _audioElapsedMs;
+      _chunkTotalStartMs = _totalElapsedMs;
       await _recorder.resume();
       _chunkRecordingStartTime = DateTime.now();
       _startChunkTimer();
@@ -546,6 +552,7 @@ class RecordingService {
       await _stopAndSaveCurrentChunk();
       _chunkIndex++;
       _audioChunkStartMs = _audioElapsedMs;
+      _chunkTotalStartMs = _totalElapsedMs;
       await _startRecordingChunk();
     } finally {
       final lock = _operationLock;
@@ -688,6 +695,8 @@ class RecordingService {
         chunkIndex: _chunkIndex,
         startTime: chunkStartTime,
         endTime: chunkEndTime,
+        totalStartTime: _chunkTotalStartMs,
+        totalEndTime: _totalElapsedMs,
         filePath: relativePath,
         format: AppConstants.defaultAudioFormat,
         sampleRate: AppConstants.defaultSampleRate,

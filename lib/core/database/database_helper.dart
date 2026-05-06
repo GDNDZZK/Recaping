@@ -97,7 +97,7 @@ class DatabaseHelper {
 
     final database = await openDatabase(
       dbPath,
-      version: 2,
+      version: 3,
       onCreate: _onSessionCreate,
       onConfigure: _onConfigure,
       onUpgrade: _onSessionUpgrade,
@@ -185,6 +185,8 @@ class DatabaseHelper {
           chunk_index INTEGER NOT NULL,
           start_time INTEGER NOT NULL,
           end_time INTEGER NOT NULL,
+          total_start_time INTEGER NOT NULL DEFAULT 0,
+          total_end_time INTEGER NOT NULL DEFAULT 0,
           file_path TEXT NOT NULL,
           format TEXT NOT NULL DEFAULT 'aac',
           sample_rate INTEGER NOT NULL DEFAULT 44100,
@@ -292,6 +294,12 @@ class DatabaseHelper {
       await db.transaction((txn) async {
         await txn.execute('ALTER TABLE photos ADD COLUMN title TEXT');
         await txn.execute('ALTER TABLE video_chunks ADD COLUMN title TEXT');
+      });
+    }
+    if (oldVersion < 3) {
+      await db.transaction((txn) async {
+        await txn.execute('ALTER TABLE audio_chunks ADD COLUMN total_start_time INTEGER NOT NULL DEFAULT 0');
+        await txn.execute('ALTER TABLE audio_chunks ADD COLUMN total_end_time INTEGER NOT NULL DEFAULT 0');
       });
     }
   }

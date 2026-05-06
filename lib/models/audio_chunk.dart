@@ -10,11 +10,23 @@ class AudioChunk {
   /// 分片序号（从 0 开始）
   final int chunkIndex;
 
-  /// 开始时间（相对于会话开始的毫秒偏移）
+  /// 开始时间（相对于录音时间轴的毫秒偏移）
   final int startTime;
 
-  /// 结束时间（相对于会话开始的毫秒偏移）
+  /// 结束时间（相对于录音时间轴的毫秒偏移）
   final int endTime;
+
+  /// 在总时间轴上的开始时间（毫秒）
+  ///
+  /// 记录该分片在总时间轴（包含静音间隔）上的起始位置。
+  /// 旧数据可能为 0，此时回放服务会退回到使用 [startTime]。
+  final int totalStartTime;
+
+  /// 在总时间轴上的结束时间（毫秒）
+  ///
+  /// 记录该分片在总时间轴上的终止位置。
+  /// 旧数据可能为 0，此时回放服务会退回到使用 [endTime]。
+  final int totalEndTime;
 
   /// 音频文件相对路径（相对于会话目录，如 audio/chunk_0.aac）
   final String filePath;
@@ -34,6 +46,8 @@ class AudioChunk {
     required this.startTime,
     required this.endTime,
     required this.filePath,
+    this.totalStartTime = 0,
+    this.totalEndTime = 0,
     this.format = 'aac',
     this.sampleRate = 44100,
     this.channels = 1,
@@ -47,6 +61,8 @@ class AudioChunk {
       startTime: map['start_time'] as int,
       endTime: map['end_time'] as int,
       filePath: map['file_path'] as String,
+      totalStartTime: (map['total_start_time'] as int?) ?? 0,
+      totalEndTime: (map['total_end_time'] as int?) ?? 0,
       format: map['format'] as String? ?? 'aac',
       sampleRate: map['sample_rate'] as int? ?? 44100,
       channels: map['channels'] as int? ?? 1,
@@ -60,6 +76,8 @@ class AudioChunk {
       'chunk_index': chunkIndex,
       'start_time': startTime,
       'end_time': endTime,
+      'total_start_time': totalStartTime,
+      'total_end_time': totalEndTime,
       'file_path': filePath,
       'format': format,
       'sample_rate': sampleRate,
@@ -73,6 +91,8 @@ class AudioChunk {
     int? chunkIndex,
     int? startTime,
     int? endTime,
+    int? totalStartTime,
+    int? totalEndTime,
     String? filePath,
     String? format,
     int? sampleRate,
@@ -83,6 +103,8 @@ class AudioChunk {
       chunkIndex: chunkIndex ?? this.chunkIndex,
       startTime: startTime ?? this.startTime,
       endTime: endTime ?? this.endTime,
+      totalStartTime: totalStartTime ?? this.totalStartTime,
+      totalEndTime: totalEndTime ?? this.totalEndTime,
       filePath: filePath ?? this.filePath,
       format: format ?? this.format,
       sampleRate: sampleRate ?? this.sampleRate,
@@ -100,6 +122,8 @@ class AudioChunk {
         'chunkIndex: $chunkIndex, '
         'startTime: $startTime, '
         'endTime: $endTime, '
+        'totalStartTime: $totalStartTime, '
+        'totalEndTime: $totalEndTime, '
         'filePath: $filePath, '
         'format: $format'
         ')';

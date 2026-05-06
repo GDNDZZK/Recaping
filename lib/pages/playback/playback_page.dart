@@ -39,8 +39,13 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
 
   @override
   void dispose() {
-    // 释放播放资源
-    ref.read(playbackServiceProvider).dispose();
+    // 先暂停播放（停止 Timer），防止 dispose 后 stream 继续发射事件
+    // 实际的资源释放由 Riverpod 的 ref.onDispose 回调处理
+    try {
+      ref.read(playbackServiceProvider).pause();
+    } catch (_) {
+      // 服务可能已释放
+    }
     super.dispose();
   }
 
@@ -87,6 +92,9 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
 
     // 监听总时长
     final duration = ref.watch(playbackDurationProvider);
+
+    // 监听录音段数据（从 AudioChunk 构建，包含暂停间隔）
+    final segments = ref.watch(playbackSegmentsProvider);
 
     // 监听时间轴事件
     final eventsAsync = ref.watch(playbackEventsProvider);
@@ -187,10 +195,11 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
           ),
           const Divider(height: 1),
 
-          // 中部时间轴（复用 RecordingTimeline）
+          // 中部时间轴（复用 RecordingTimeline，传入从 AudioChunk 构建的 segments）
           Expanded(
             child: RecordingTimeline(
               events: events,
+              segments: segments,
               totalElapsedMs: totalDurationMs,
               isPlaybackMode: true,
               currentPlaybackMs: position.inMilliseconds,

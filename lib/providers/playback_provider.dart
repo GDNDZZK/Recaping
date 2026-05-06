@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/database/session_database.dart';
 import '../models/bookmark.dart';
 import '../models/photo.dart';
+import '../models/recording_segment.dart';
 import '../models/text_note.dart';
 import '../models/timeline_event.dart';
 import '../models/video_chunk.dart';
@@ -47,6 +48,54 @@ final playbackPositionProvider = StreamProvider<Duration>((ref) {
 final playbackDurationProvider = Provider<Duration>((ref) {
   final service = ref.watch(playbackServiceProvider);
   return service.duration;
+});
+
+/// 回放录音段 Provider
+///
+/// 从 [AudioPlaybackService] 的 AudioChunk 数据构建 [RecordingSegment] 列表。
+/// 优先使用 totalStartTime/totalEndTime（总时间轴位置，包含暂停间隔），
+/// 旧数据退回到 startTime/endTime（录音时间轴，连续无间隔）。
+/// Author: GDNDZZK
+final playbackSegmentsProvider = Provider<List<RecordingSegment>>((ref) {
+  final service = ref.watch(playbackServiceProvider);
+  final chunks = service.chunks;
+  if (chunks.isEmpty) return [];
+
+  final segments = <RecordingSegment>[];
+
+  for (int i = 0; i < chunks.length; i++) {
+    final chunk = chunks[i];
+    final hasTotalTime =
+        chunk.totalStartTime > 0 || chunk.totalEndTime > 0;
+    final segStart =
+        hasTotalTime ? chunk.totalStartTime : chunk.startTime;
+    final segEnd = hasTotalTime ? chunk.totalEndTime : chunk.endTime;
+
+    // 添加录音段（红色）
+    segments.add(RecordingSegment(
+      startMs: segStart,
+      endMs: segEnd,
+      isRecording: true,
+    ));
+
+    // 如果与下一个录音段之间有间隔，添加暂停段（灰色）
+    if (i + 1 < chunks.length) {
+      final nextChunk = chunks[i + 1];
+      final nextHasTotal =
+          nextChunk.totalStartTime > 0 || nextChunk.totalEndTime > 0;
+      final nextStart =
+          nextHasTotal ? nextChunk.totalStartTime : nextChunk.startTime;
+      if (nextStart > segEnd) {
+        segments.add(RecordingSegment(
+          startMs: segEnd,
+          endMs: nextStart,
+          isRecording: false,
+        ));
+      }
+    }
+  }
+
+  return segments;
 });
 
 /// 播放速度 Notifier

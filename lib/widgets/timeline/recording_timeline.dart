@@ -291,18 +291,42 @@ class _RecordingTimelineState extends State<RecordingTimeline>
   static const Color _pausedColor = Color(0xFF9E9E9E);
 
   /// 从 audio 类型事件推导录音段数据（回放模式使用）
+  ///
+  /// 根据 audio 事件构建录音段（红色）和暂停间隔段（灰色）。
+  /// 两个相邻录音段之间如果存在间隔，会自动插入灰色暂停段。
   List<RecordingSegment> _buildSegmentsFromEvents(List<TimelineEvent> events) {
     final audioEvents =
         events.where((e) => e.type == TimelineEventType.audio).toList();
     if (audioEvents.isEmpty) return [];
 
-    return audioEvents
-        .map((e) => RecordingSegment(
-              startMs: e.timestamp,
-              endMs: e.timestamp + e.audioDurationMs,
-              isRecording: true,
-            ))
-        .toList();
+    final segments = <RecordingSegment>[];
+
+    for (int i = 0; i < audioEvents.length; i++) {
+      final e = audioEvents[i];
+      final segStart = e.timestamp;
+      final segEnd = e.timestamp + e.audioDurationMs;
+
+      // 添加录音段（红色）
+      segments.add(RecordingSegment(
+        startMs: segStart,
+        endMs: segEnd,
+        isRecording: true,
+      ));
+
+      // 如果与下一个录音段之间有间隔，添加暂停段（灰色）
+      if (i + 1 < audioEvents.length) {
+        final nextStart = audioEvents[i + 1].timestamp;
+        if (nextStart > segEnd) {
+          segments.add(RecordingSegment(
+            startMs: segEnd,
+            endMs: nextStart,
+            isRecording: false,
+          ));
+        }
+      }
+    }
+
+    return segments;
   }
 
   /// 获取有效的录音段数据

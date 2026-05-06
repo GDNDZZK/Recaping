@@ -453,17 +453,23 @@ class SessionDatabase {
     }
 
     // 获取录音区间事件（每个 audio_chunk 作为独立事件）
+    // 优先使用 total_start_time/total_end_time（总时间轴），
+    // 若为 0（旧数据）则退回到 start_time/end_time（录音时间轴）
     final audioChunks = await _db.query(
       'audio_chunks',
       orderBy: 'chunk_index ASC',
     );
     for (final map in audioChunks) {
       final chunkIndex = (map['chunk_index'] as int?) ?? 0;
+      final totalStart = (map['total_start_time'] as int?) ?? 0;
+      final totalEnd = (map['total_end_time'] as int?) ?? 0;
+      final startTime = totalStart > 0 ? totalStart : (map['start_time'] as int);
+      final endTime = totalEnd > 0 ? totalEnd : (map['end_time'] as int);
       events.add(
         TimelineEvent.fromAudio(
           id: map['id'] as String,
-          startTime: map['start_time'] as int,
-          endTime: map['end_time'] as int,
+          startTime: startTime,
+          endTime: endTime,
           label: '录音 #${chunkIndex + 1}',
         ),
       );
@@ -571,6 +577,8 @@ class SessionDatabase {
     }
 
     // 录音区间事件（每个 audio_chunk 作为独立事件，与时间范围有交集的）
+    // 优先使用 total_start_time/total_end_time（总时间轴），
+    // 若为 0（旧数据）则退回到 start_time/end_time（录音时间轴）
     final audioChunks = await _db.query(
       'audio_chunks',
       where: 'start_time <= ? AND end_time >= ?',
@@ -579,11 +587,15 @@ class SessionDatabase {
     );
     for (final map in audioChunks) {
       final chunkIndex = (map['chunk_index'] as int?) ?? 0;
+      final totalStart = (map['total_start_time'] as int?) ?? 0;
+      final totalEnd = (map['total_end_time'] as int?) ?? 0;
+      final startTime = totalStart > 0 ? totalStart : (map['start_time'] as int);
+      final endTime = totalEnd > 0 ? totalEnd : (map['end_time'] as int);
       events.add(
         TimelineEvent.fromAudio(
           id: map['id'] as String,
-          startTime: map['start_time'] as int,
-          endTime: map['end_time'] as int,
+          startTime: startTime,
+          endTime: endTime,
           label: '录音 #${chunkIndex + 1}',
         ),
       );

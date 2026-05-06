@@ -66,6 +66,9 @@ class AudioPlaybackService {
   /// 当前活跃的 chunk 索引（-1 表示静音区间）
   int _activeChunkIndex = -1;
 
+  /// 防重入锁：正在切换 chunk 时为 true
+  bool _isTransitioning = false;
+
   // ==================== Session 信息 ====================
 
   String? _currentSessionId;
@@ -176,6 +179,13 @@ class AudioPlaybackService {
     if (_state == PlaybackState.playing) return;
     if (_currentSessionId == null) return;
 
+    // 如果已在末尾或超过末尾，从头开始
+    if (_currentTotalMs >= _totalDurationMs && _totalDurationMs > 0) {
+      _currentTotalMs = 0;
+      _activeChunkIndex = -1;
+      _emitPosition(Duration.zero);
+    }
+
     _setState(PlaybackState.playing);
 
     _elapsedBeforeResume = _currentTotalMs;
@@ -206,6 +216,22 @@ class AudioPlaybackService {
     }
 
     _setState(PlaybackState.paused);
+  }
+
+  /// 完全停止播放并重置状态
+  Future<void> stop() async {
+    _stopwatch.stop();
+    _stopwatch.reset();
+    _timelineTimer?.cancel();
+    _timelineTimer = null;
+    _isTransitioning = false;
+    try {
+      await _player.stop();
+    } catch (_) {}
+    _currentTotalMs = 0;
+    _activeChunkIndex = -1;
+    _emitPosition(Duration.zero);
+    _setState(PlaybackState.idle);
   }
 
   /// 跳转到指定时间位置
@@ -363,22 +389,26 @@ class AudioPlaybackService {
 
   /// 切换到指定 chunk
   Future<void> _transitionToChunk(int newIndex) async {
-    if (newIndex == _activeChunkIndex) return;
+    if (newIndex == _activeChunkIndex || _isTransitioning) return;
+    _isTransitioning = true;
+    try {
+      _activeChunkIndex = newIndex; // 在加载前更新，防止重复加载
 
-    if (newIndex < 0) {
-      // 进入静音区间 → 暂停音频
-      try {
-        await _player.pause();
-      } catch (_) {
-        // 播放器可能未初始化
+      if (newIndex < 0) {
+        // 进入静音区间 → 暂停音频
+        try {
+          await _player.pause();
+        } catch (_) {
+          // 播放器可能未初始化
+        }
+      } else {
+        // 进入音频 chunk → 加载并播放
+        final chunk = _chunks[newIndex];
+        await _loadAndPlayChunk(chunk);
       }
-    } else {
-      // 进入音频 chunk → 加载并播放
-      final chunk = _chunks[newIndex];
-      await _loadAndPlayChunk(chunk);
+    } finally {
+      _isTransitioning = false;
     }
-
-    _activeChunkIndex = newIndex;
   }
 
   /// 加载并播放单个 chunk
@@ -407,9 +437,9 @@ class AudioPlaybackService {
         await _player.seek(Duration(milliseconds: offsetInChunk));
       }
 
-      // 如果正在播放，开始播放
+      // 如果正在播放，开始播放（不等待，fire-and-forget）
       if (_state == PlaybackState.playing) {
-        await _player.play();
+        _player.play();
       }
     } catch (e) {
       // 加载失败，当作静音处理
@@ -460,7 +490,7 @@ class AudioPlaybackService {
     }
 
     _emitPosition(Duration(milliseconds: _currentTotalMs));
-    _setState(PlaybackState.idle);
+    _setState(PlaybackState.paused);
   }
 
   /// 更新播放状态

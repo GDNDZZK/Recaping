@@ -55,6 +55,11 @@ class RecordingTimeline extends StatefulWidget {
   /// 是否正在播放（回放模式使用）
   final bool? isPlaying;
 
+  /// 播放头拖动跳转回调（回放模式使用）
+  ///
+  /// 用户拖动时间轴上的播放头标记时触发，参数为目标位置（毫秒）。
+  final ValueChanged<int>? onSeek;
+
   const RecordingTimeline({
     super.key,
     required this.events,
@@ -65,6 +70,7 @@ class RecordingTimeline extends StatefulWidget {
     this.isPlaybackMode = false,
     this.currentPlaybackMs,
     this.isPlaying,
+    this.onSeek,
   });
 
   @override
@@ -87,6 +93,20 @@ class _RecordingTimelineState extends State<RecordingTimeline>
   /// 默认为 `true`，用户手动滚动时自动设为 `false`，
   /// 点击跟随按钮可恢复为 `true`。
   bool _isFollowing = true;
+
+  // ===== 播放头拖动状态 =====
+
+  /// 是否正在拖动播放头
+  bool _isDraggingPlayhead = false;
+
+  /// 拖动播放头时的临时位置（毫秒）
+  int _draggingPlayheadMs = 0;
+
+  /// 拖动开始时的全局 Y 坐标
+  double _dragStartGlobalY = 0;
+
+  /// 拖动开始时的播放位置（毫秒）
+  int _dragStartMs = 0;
 
   @override
   void initState() {
@@ -342,7 +362,9 @@ class _RecordingTimelineState extends State<RecordingTimeline>
   /// 获取当前有效位置（毫秒）
   ///
   /// 回放模式下使用 [currentPlaybackMs]，录音模式下使用 [totalElapsedMs]。
+  /// 拖动播放头时返回拖动临时位置。
   int get _effectivePositionMs {
+    if (_isDraggingPlayhead) return _draggingPlayheadMs;
     if (widget.isPlaybackMode && widget.currentPlaybackMs != null) {
       return widget.currentPlaybackMs!;
     }
@@ -1050,27 +1072,99 @@ class _RecordingTimelineState extends State<RecordingTimeline>
 
   // ==================== 当前位置指示器 ====================
 
-  /// 构建当前时间位置指示器（蓝色发光圆点）
-  Widget _buildCurrentPositionIndicator(int totalMs) {
-    final y = _msToY(totalMs);
+  /// 构建当前时间位置指示器（蓝色发光圆点，回放模式下可拖动）
+  Widget _buildCurrentPositionIndicator(int positionMs) {
+    final y = _msToY(positionMs);
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final isDraggable = widget.isPlaybackMode && widget.onSeek != null;
 
+    final indicator = Container(
+      width: _timelineWidth + 6,
+      height: _timelineWidth + 6,
+      decoration: BoxDecoration(
+        color: colorScheme.primary,
+        shape: BoxShape.circle,
+        boxShadow: [
+          BoxShadow(
+            color: colorScheme.primary.withValues(alpha: 0.4),
+            blurRadius: 6,
+            spreadRadius: 2,
+          ),
+        ],
+      ),
+    );
+
+    if (!isDraggable) {
+      return Positioned(
+        top: y - 5,
+        left: _timelineLeft - 3,
+        child: indicator,
+      );
+    }
+
+    // 可拖动的播放头：扩大触摸区域并添加拖动手势
     return Positioned(
-      top: y - 5,
-      left: _timelineLeft - 3,
-      child: Container(
-        width: _timelineWidth + 6,
-        height: _timelineWidth + 6,
-        decoration: BoxDecoration(
-          color: Theme.of(context).colorScheme.primary,
-          shape: BoxShape.circle,
-          boxShadow: [
-            BoxShadow(
-              color:
-                  Theme.of(context).colorScheme.primary.withValues(alpha: 0.4),
-              blurRadius: 6,
-              spreadRadius: 2,
-            ),
-          ],
+      top: y - 20,
+      left: _timelineLeft - 16,
+      child: GestureDetector(
+        onVerticalDragStart: _isDraggingPlayhead
+            ? null
+            : (details) {
+                setState(() {
+                  _isDraggingPlayhead = true;
+                  _isFollowing = false;
+                  _dragStartGlobalY = details.globalPosition.dy;
+                  _dragStartMs = positionMs;
+                  _draggingPlayheadMs = positionMs;
+                });
+              },
+        onVerticalDragUpdate: (details) {
+          final deltaY = details.globalPosition.dy - _dragStartGlobalY;
+          final deltaMs = (deltaY / _pixelsPerMs).round();
+          final newMs =
+              (_dragStartMs + deltaMs).clamp(0, widget.totalElapsedMs);
+          setState(() {
+            _draggingPlayheadMs = newMs;
+          });
+        },
+        onVerticalDragEnd: (details) {
+          final targetMs = _draggingPlayheadMs;
+          setState(() {
+            _isDraggingPlayhead = false;
+          });
+          widget.onSeek?.call(targetMs);
+        },
+        child: Container(
+          width: 36,
+          height: _isDraggingPlayhead ? 48 : 32,
+          alignment: Alignment.center,
+          color: Colors.transparent,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // 拖动时显示时间标签
+              if (_isDraggingPlayhead)
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                  decoration: BoxDecoration(
+                    color: colorScheme.primary,
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Text(
+                    _formatTime(_draggingPlayheadMs),
+                    style: TextStyle(
+                      fontSize: 9,
+                      fontFamily: 'monospace',
+                      color: colorScheme.onPrimary,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              indicator,
+            ],
+          ),
         ),
       ),
     );

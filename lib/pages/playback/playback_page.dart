@@ -29,6 +29,12 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
   /// 是否已加载数据
   bool _isLoading = true;
 
+  /// 是否正在拖动进度条
+  bool _isDragging = false;
+
+  /// 拖动时的临时位置（毫秒）
+  double _draggingValue = 0;
+
   @override
   void initState() {
     super.initState();
@@ -39,10 +45,10 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
 
   @override
   void dispose() {
-    // 先暂停播放（停止 Timer），防止 dispose 后 stream 继续发射事件
+    // 完全停止播放并重置状态，防止 dispose 后音频继续播放
     // 实际的资源释放由 Riverpod 的 ref.onDispose 回调处理
     try {
-      ref.read(playbackServiceProvider).pause();
+      ref.read(playbackServiceProvider).stop();
     } catch (_) {
       // 服务可能已释放
     }
@@ -189,7 +195,7 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
           // 顶部播放状态区域
           _buildPlaybackStatusArea(
             context,
-            isPlaying,
+            playbackState,
             position,
             duration,
           ),
@@ -205,6 +211,9 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
               currentPlaybackMs: position.inMilliseconds,
               isPlaying: isPlaying,
               onEventTap: (event) => _handleEventDetail(event),
+              onSeek: (ms) {
+                ref.read(playbackControlProvider.notifier).seekTo(ms);
+              },
             ),
           ),
           const Divider(height: 1),
@@ -223,7 +232,7 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
   /// 参考录音页面的状态区域样式，显示播放状态、时间和进度条。
   Widget _buildPlaybackStatusArea(
     BuildContext context,
-    bool isPlaying,
+    PlaybackState? playbackState,
     Duration position,
     Duration duration,
   ) {
@@ -231,6 +240,8 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
     final totalMs = duration.inMilliseconds.toDouble();
     final positionMs =
         position.inMilliseconds.toDouble().clamp(0.0, totalMs > 0 ? totalMs : 0.0);
+    final isPlaying = playbackState == PlaybackState.playing;
+    final isAtEnd = position.inMilliseconds >= duration.inMilliseconds && duration.inMilliseconds > 0;
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
@@ -250,9 +261,17 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
               ),
               const SizedBox(width: 8),
               Text(
-                isPlaying ? '播放中' : '已暂停',
+                playbackState == PlaybackState.playing
+                    ? '播放中'
+                    : isAtEnd
+                        ? '播放完成'
+                        : '已暂停',
                 style: theme.textTheme.bodySmall?.copyWith(
-                  color: isPlaying ? Colors.green : Colors.grey,
+                  color: isPlaying
+                      ? Colors.green
+                      : isAtEnd
+                          ? Colors.orange
+                          : Colors.grey,
                 ),
               ),
             ],
@@ -260,7 +279,7 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
           const SizedBox(height: 12),
           // 当前时间 / 总时长
           Text(
-            '${_formatDuration(position)} / ${_formatDuration(duration)}',
+            '${_formatDuration(_isDragging ? Duration(milliseconds: _draggingValue.toInt()) : position)} / ${_formatDuration(duration)}',
             style: theme.textTheme.headlineMedium?.copyWith(
               fontFamily: 'monospace',
               fontWeight: FontWeight.bold,
@@ -276,13 +295,26 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
                 trackHeight: 3,
               ),
               child: Slider(
-                value: positionMs,
+                value: _isDragging
+                    ? _draggingValue.clamp(0.0, totalMs)
+                    : positionMs,
                 min: 0,
                 max: totalMs,
+                onChangeStart: (value) {
+                  setState(() {
+                    _isDragging = true;
+                    _draggingValue = value;
+                  });
+                },
                 onChanged: (value) {
-                  // 拖动时不立即跳转
+                  setState(() {
+                    _draggingValue = value;
+                  });
                 },
                 onChangeEnd: (value) {
+                  setState(() {
+                    _isDragging = false;
+                  });
                   ref.read(playbackControlProvider.notifier).seekTo(value.toInt());
                 },
               ),

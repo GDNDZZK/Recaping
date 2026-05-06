@@ -314,6 +314,12 @@ class PlaybackControlNotifier extends StateNotifier<AsyncValue<void>> {
     }
   }
 
+  /// 停止播放并重置状态
+  void stop() {
+    final service = _ref.read(playbackServiceProvider);
+    service.stop();
+  }
+
   /// 跳转到下一个事件时间点
   Future<void> skipToNextEvent() async {
     try {

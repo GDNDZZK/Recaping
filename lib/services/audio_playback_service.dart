@@ -32,6 +32,9 @@ enum PlaybackState {
 ///
 /// 使用 Stopwatch + Timer 驱动总时间轴前进，根据当前总时间轴位置判断
 /// 落在哪个录音 chunk（或静音区间），独立加载并播放对应的单个 chunk 文件。
+///
+/// 使用 [_generation] 代数计数器替代布尔标志，确保 stop/load 后所有
+/// in-flight 异步操作能被可靠地识别和取消。
 /// Author: GDNDZZK
 class AudioPlaybackService {
   final AudioPlayer _player = AudioPlayer();
@@ -69,8 +72,10 @@ class AudioPlaybackService {
   /// 防重入锁：正在切换 chunk 时为 true
   bool _isTransitioning = false;
 
-  /// 是否已停止（阻止 stop 后的异步操作继续执行）
-  bool _isStopped = true;
+  /// 代数计数器：每次 stop() 或 loadSession() 递增。
+  /// 所有异步操作在 await 后检查此值是否与启动时一致，
+  /// 不一致则说明已被取消，应立即返回。
+  int _generation = 0;
 
   // ==================== Session 信息 ====================
 
@@ -123,8 +128,9 @@ class AudioPlaybackService {
     String sessionId,
     SessionDatabase db,
   ) async {
-    // 先停止之前的所有异步操作
-    _isStopped = true;
+    debugPrint('[PlaybackService] loadSession($sessionId), generation=$_generation');
+    // 递增代数，使所有之前的异步操作失效
+    _generation++;
     _stopwatch.stop();
     _stopwatch.reset();
     _timelineTimer?.cancel();
@@ -135,20 +141,23 @@ class AudioPlaybackService {
     _currentSessionId = sessionId;
     _sessionDb = db;
 
+    // 保存启动时的代数
+    final gen = _generation;
+
     try {
       // 加载会话元信息获取总时长
       final session = await db.getSessionInfo();
-      if (_isDisposed) return;
+      if (_isDisposed || _generation != gen) return;
       _totalDurationMs = session?.duration ?? 0;
 
       // 从数据库加载所有音频分片的元数据
       final allChunks = await db.getAudioChunks();
-      if (_isDisposed) return;
+      if (_isDisposed || _generation != gen) return;
 
       if (allChunks.isEmpty) {
         _currentTotalMs = 0;
         _activeChunkIndex = -1;
-        _isStopped = false;
+        _emitPosition(Duration.zero);
         _setState(PlaybackState.idle);
         return;
       }
@@ -180,11 +189,10 @@ class AudioPlaybackService {
 
       _currentTotalMs = 0;
       _activeChunkIndex = -1;
+      _emitPosition(Duration.zero);
 
-      _isStopped = false;
       _setState(PlaybackState.paused);
     } catch (e) {
-      _isStopped = false;
       _setState(PlaybackState.error);
       throw Exception('Failed to load session audio: $e');
     }
@@ -192,11 +200,9 @@ class AudioPlaybackService {
 
   /// 播放
   Future<void> play() async {
+    debugPrint('[PlaybackService] play() called, state=$_state, generation=$_generation, sessionId=$_currentSessionId');
     if (_state == PlaybackState.playing) return;
     if (_currentSessionId == null) return;
-
-    // 重置停止标志，允许异步操作执行
-    _isStopped = false;
 
     // 如果已在末尾或超过末尾，从头开始
     if (_currentTotalMs >= _totalDurationMs && _totalDurationMs > 0) {
@@ -211,17 +217,35 @@ class AudioPlaybackService {
     _stopwatch.reset();
     _stopwatch.start();
 
-    // 立即处理当前位置
-    await _handleTimelinePosition();
+    // 保存启动时的代数
+    final gen = _generation;
 
-    // 启动定时器前再次检查是否已被停止
-    if (_isStopped) return;
+    // 如果当前已在某个 chunk 中且播放器已加载，立即恢复播放（不阻塞）
+    // 这处理了"暂停后再播放"的场景：chunk 未变，不需要重新加载
+    if (_activeChunkIndex >= 0 && !_isTransitioning) {
+      try {
+        if (!_player.playing) {
+          debugPrint('[PlaybackService] play() resuming existing chunk $_activeChunkIndex');
+          _player.play().catchError((_) {});
+        }
+      } catch (_) {
+        // 播放器可能未初始化
+      }
+    }
+
+    // 立即处理当前位置
+    await _handleTimelinePosition(gen);
+    if (_generation != gen) return;
+
+    // 启动定时器
     _timelineTimer?.cancel();
     _timelineTimer = Timer.periodic(const Duration(milliseconds: 50), _onTick);
+    debugPrint('[PlaybackService] play() timer started, generation=$gen');
   }
 
   /// 暂停
   Future<void> pause() async {
+    debugPrint('[PlaybackService] pause() called, state=$_state, generation=$_generation');
     if (_state != PlaybackState.playing) return;
 
     _stopwatch.stop();
@@ -240,22 +264,32 @@ class AudioPlaybackService {
 
   /// 完全停止播放并重置状态
   ///
-  /// 设置 [_isStopped] 标志以阻止所有 in-flight 异步操作继续执行。
+  /// 使用代数计数器 [_generation] 使所有 in-flight 异步操作失效。
+  /// 所有同步操作（设置标志、取消 Timer、重置位置、通知 UI）在异步操作之前完成。
   Future<void> stop() async {
-    // 首先设置停止标志，阻止所有 in-flight 异步操作
-    _isStopped = true;
+    debugPrint('[PlaybackService] stop() called, state=$_state, generation=$_generation');
+    // ① 同步操作：递增代数，使所有 in-flight 异步操作失效
+    _generation++;
     _stopwatch.stop();
     _stopwatch.reset();
     _timelineTimer?.cancel();
     _timelineTimer = null;
     _isTransitioning = false;
-    try {
-      await _player.stop();
-    } catch (_) {}
+    debugPrint('[PlaybackService] stop() sync part done, timer cancelled=${_timelineTimer == null}');
+
+    // ② 同步重置位置和状态（在 await 之前执行，确保 UI 立即收到通知）
     _currentTotalMs = 0;
     _activeChunkIndex = -1;
     _emitPosition(Duration.zero);
     _setState(PlaybackState.idle);
+
+    // ③ 异步操作：停止底层播放器
+    try {
+      await _player.stop();
+    } catch (_) {
+      // 播放器可能未初始化或已释放
+    }
+    debugPrint('[PlaybackService] stop() async part done');
   }
 
   /// 跳转到指定时间位置
@@ -271,8 +305,11 @@ class AudioPlaybackService {
 
     _emitPosition(Duration(milliseconds: _currentTotalMs));
 
+    // 保存启动时的代数
+    final gen = _generation;
+
     // 处理新位置
-    await _handleTimelinePosition();
+    await _handleTimelinePosition(gen);
   }
 
   /// 跳转到下一个事件时间点
@@ -342,11 +379,13 @@ class AudioPlaybackService {
   Future<void> dispose() async {
     if (_isDisposed) return;
     _isDisposed = true;
-    _isStopped = true;
 
+    // 递增代数，使所有 in-flight 异步操作失效
+    _generation++;
     _stopwatch.stop();
     _timelineTimer?.cancel();
     _timelineTimer = null;
+
     await _player.dispose();
 
     // 关闭 stream controllers，防止 dispose 后继续发射事件
@@ -362,7 +401,7 @@ class AudioPlaybackService {
 
   /// 定时器回调
   void _onTick(Timer timer) {
-    if (_isDisposed || _isStopped) return;
+    if (_isDisposed) return;
 
     _currentTotalMs =
         _elapsedBeforeResume + (_stopwatch.elapsedMilliseconds * _speed).toInt();
@@ -374,8 +413,11 @@ class AudioPlaybackService {
       return;
     }
 
-    // 处理当前位置（fire-and-forget，但内部会检查 _isStopped）
-    _handleTimelinePosition();
+    // 保存当前代数，传给异步操作
+    final gen = _generation;
+
+    // 处理当前位置（fire-and-forget，但内部会检查代数）
+    _handleTimelinePosition(gen);
 
     // 通知位置更新
     _emitPosition(Duration(milliseconds: _currentTotalMs));
@@ -384,18 +426,20 @@ class AudioPlaybackService {
   /// 处理当前时间轴位置
   ///
   /// 判断当前时间落在哪个 chunk（或静音区间），必要时切换 chunk。
-  /// 在每个 await 点之后检查 [_isStopped]，防止 stop() 后继续执行。
-  Future<void> _handleTimelinePosition() async {
-    if (_isStopped) return;
+  /// 使用 [expectedGen] 参数在 await 后检查代数是否一致。
+  Future<void> _handleTimelinePosition(int expectedGen) async {
+    if (_generation != expectedGen) return;
     final chunkIndex = _findChunkAtTotalTime(_currentTotalMs);
 
     if (chunkIndex != _activeChunkIndex) {
-      await _transitionToChunk(chunkIndex);
-      if (_isStopped) return;
+      await _transitionToChunk(chunkIndex, expectedGen);
+      if (_generation != expectedGen) return;
     }
 
     // 如果在音频 chunk 内且正在播放，同步播放位置
-    if (_activeChunkIndex >= 0 && _state == PlaybackState.playing && !_isStopped) {
+    if (_activeChunkIndex >= 0 &&
+        _state == PlaybackState.playing &&
+        _generation == expectedGen) {
       final chunk = _chunks[_activeChunkIndex];
       final hasTotalTime = chunk.totalStartTime > 0 || chunk.totalEndTime > 0;
       final chunkStart = hasTotalTime ? chunk.totalStartTime : chunk.startTime;
@@ -417,9 +461,13 @@ class AudioPlaybackService {
 
   /// 切换到指定 chunk
   ///
-  /// 在 await 后检查 [_isStopped]，防止 stop() 后继续加载/播放。
-  Future<void> _transitionToChunk(int newIndex) async {
-    if (newIndex == _activeChunkIndex || _isTransitioning || _isStopped) return;
+  /// 使用 [expectedGen] 参数在 await 后检查代数是否一致。
+  Future<void> _transitionToChunk(int newIndex, int expectedGen) async {
+    if (newIndex == _activeChunkIndex ||
+        _isTransitioning ||
+        _generation != expectedGen) {
+      return;
+    }
     _isTransitioning = true;
     try {
       _activeChunkIndex = newIndex; // 在加载前更新，防止重复加载
@@ -434,11 +482,11 @@ class AudioPlaybackService {
       } else {
         // 进入音频 chunk → 加载并播放
         final chunk = _chunks[newIndex];
-        await _loadAndPlayChunk(chunk);
+        await _loadAndPlayChunk(chunk, expectedGen);
       }
     } finally {
-      // 只在未停止时重置过渡标志
-      if (!_isStopped) {
+      // 只在代数未变时重置过渡标志
+      if (_generation == expectedGen) {
         _isTransitioning = false;
       }
     }
@@ -446,19 +494,21 @@ class AudioPlaybackService {
 
   /// 加载并播放单个 chunk
   ///
-  /// 在每个 await 点之后检查 [_isStopped]，确保 stop() 后不会触发播放。
-  Future<void> _loadAndPlayChunk(AudioChunk chunk) async {
+  /// 使用 [expectedGen] 参数在每个 await 点之后检查代数是否一致，
+  /// 确保 stop()/loadSession() 后不会触发新的播放。
+  Future<void> _loadAndPlayChunk(AudioChunk chunk, int expectedGen) async {
+    debugPrint('[PlaybackService] _loadAndPlayChunk($expectedGen), generation=$_generation, state=$_state');
     try {
       // 构建文件绝对路径
       final filePath = await _getChunkFilePath(chunk);
-      if (_isStopped) return;
+      if (_generation != expectedGen) return;
       final file = File(filePath);
 
       if (!await file.exists()) {
         // 文件不存在，当作静音处理
         return;
       }
-      if (_isStopped) return;
+      if (_generation != expectedGen) return;
 
       // 计算在 chunk 内的偏移
       final hasTotalTime = chunk.totalStartTime > 0 || chunk.totalEndTime > 0;
@@ -467,19 +517,23 @@ class AudioPlaybackService {
 
       // 加载 chunk 文件
       await _player.setFilePath(filePath);
-      if (_isStopped) return;
+      debugPrint('[PlaybackService] _loadAndPlayChunk($expectedGen) after setFilePath, gen changed=${_generation != expectedGen}');
+      if (_generation != expectedGen) return;
       await _player.setSpeed(_speed);
-      if (_isStopped) return;
+      if (_generation != expectedGen) return;
 
       // seek 到正确位置
       if (offsetInChunk > 0) {
         await _player.seek(Duration(milliseconds: offsetInChunk));
-        if (_isStopped) return;
+        if (_generation != expectedGen) return;
       }
 
-      // 如果正在播放且未被停止，开始播放
-      if (_state == PlaybackState.playing && !_isStopped) {
-        _player.play();
+      // 如果正在播放且代数未变，开始播放。
+      // 注意：不 await _player.play()，因为 play() 的 Future 在音频播放完成
+      // 或被暂停/停止时才完成。如果 await，会阻塞 play() 方法中 Timer 的启动，
+      // 导致进度条不动。
+      if (_state == PlaybackState.playing && _generation == expectedGen) {
+        _player.play().catchError((_) {});
       }
     } catch (e) {
       // 加载失败，当作静音处理
@@ -534,6 +588,9 @@ class AudioPlaybackService {
   }
 
   /// 更新播放状态
+  ///
+  /// 无条件更新 [_state] 并向流控制器发送事件。
+  /// 仅在 [_isDisposed] 为 true 或流控制器已关闭时跳过发送。
   void _setState(PlaybackState newState) {
     _state = newState;
     if (!_isDisposed && !_stateController.isClosed) {
@@ -542,6 +599,8 @@ class AudioPlaybackService {
   }
 
   /// 安全发射位置事件
+  ///
+  /// 仅在 [_isDisposed] 为 true 或流控制器已关闭时跳过发送。
   void _emitPosition(Duration position) {
     if (!_isDisposed && !_positionController.isClosed) {
       _positionController.add(position);

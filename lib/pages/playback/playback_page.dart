@@ -35,6 +35,11 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
   /// 拖动时的临时位置（毫秒）
   double _draggingValue = 0;
 
+  /// 缓存的播放服务引用。
+  /// 在 [build()] 中通过 [ref] 获取并缓存，避免 [dispose()] 时 [ref] 已失效
+  /// （Riverpod 在 widget dispose 后不允许使用 ref）导致无法调用 [stop()]。
+  AudioPlaybackService? _cachedService;
+
   @override
   void initState() {
     super.initState();
@@ -45,12 +50,19 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
 
   @override
   void dispose() {
-    // 完全停止播放并重置状态，防止 dispose 后音频继续播放
-    // 实际的资源释放由 Riverpod 的 ref.onDispose 回调处理
-    try {
-      ref.read(playbackServiceProvider).stop();
-    } catch (_) {
-      // 服务可能已释放
+    debugPrint('[PlaybackPage] dispose() called');
+    // 使用缓存的服务引用调用 stop()，避免 dispose 时 ref 已失效。
+    // Riverpod 的 ConsumerState 在 dispose() 时 ref 已不可用
+    // （抛出 "Cannot use ref after the widget was disposed"），
+    // 因此在 build() 中提前缓存了服务引用。
+    // stop() 的同步部分（递增 generation、取消 Timer、重置位置、通知 UI）
+    // 会立即执行，确保所有 in-flight 异步操作失效。
+    final service = _cachedService;
+    if (service != null) {
+      debugPrint('[PlaybackPage] calling service.stop(), current state=${service.state}');
+      service.stop();
+    } else {
+      debugPrint('[PlaybackPage] no cached service available');
     }
     super.dispose();
   }
@@ -77,6 +89,10 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
 
   @override
   Widget build(BuildContext context) {
+    // 缓存服务引用：ref 在 build() 中始终有效，但在 dispose() 中已失效。
+    // 使用 ??= 确保只赋值一次，后续 build() 调用不会重复赋值。
+    _cachedService ??= ref.read(playbackServiceProvider);
+
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
     const accentColor = Color(0xFF6B6BFF);

@@ -169,7 +169,7 @@ class SessionCard extends StatelessWidget {
         ),
         const SizedBox(width: 4),
         Text(
-          DateFormatUtil.formatDuration(session.audioDuration),
+          DateFormatUtil.formatDuration(session.duration),
           style: theme.textTheme.bodySmall?.copyWith(
             color: colorScheme.onSurfaceVariant,
           ),

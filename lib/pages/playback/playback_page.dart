@@ -112,9 +112,6 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
     // 监听播放速度
     final speed = ref.watch(playbackSpeedProvider);
 
-    // 监听总时长
-    final duration = ref.watch(playbackDurationProvider);
-
     // 监听录音段数据（从 AudioChunk 构建，包含暂停间隔）
     final segments = ref.watch(playbackSegmentsProvider);
 
@@ -217,7 +214,7 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
             context,
             playbackState,
             position,
-            duration,
+            Duration(milliseconds: totalDurationMs),
           ),
           const Divider(height: 1),
 

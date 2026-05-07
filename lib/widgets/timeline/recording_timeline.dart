@@ -1107,10 +1107,21 @@ class _RecordingTimelineState extends State<RecordingTimeline>
       );
     }
 
-    // 可拖动的播放头：扩大触摸区域并添加拖动手势
+    // 可拖动的播放头：使用 Stack 布局确保圆点位置不受时间标签影响
+    //
+    // 关键设计：指示器圆点始终固定在精确的时间轴位置（y），
+    // 时间标签浮动在圆点上方，不影响圆点定位。
+    // 触摸区域固定大小，不随拖动状态变化。
+    const double touchWidth = 36.0;
+    const double touchHeight = 48.0;
+    const double indicatorBottomPadding = 7.0; // 圆点顶部距触摸区域底部的距离
+    // 圆点中心距触摸区域底部 = indicatorBottomPadding + indicatorRadius = 7 + 5 = 12
+    // Positioned.top = y - (touchHeight - 12) = y - 36
+    // → 圆点中心绝对位置 = y - 36 + 36 = y ✓
+
     return Positioned(
-      top: y - 20,
-      left: _timelineLeft - 16,
+      top: y - (touchHeight - indicatorBottomPadding - (_timelineWidth + 6) / 2),
+      left: _timelineLeft - (touchWidth - _timelineWidth) / 2,
       child: GestureDetector(
         onVerticalDragStart: _isDraggingPlayhead
             ? null
@@ -1139,34 +1150,45 @@ class _RecordingTimelineState extends State<RecordingTimeline>
           });
           widget.onSeek?.call(targetMs);
         },
-        child: Container(
-          width: 36,
-          height: _isDraggingPlayhead ? 48 : 32,
-          alignment: Alignment.center,
-          color: Colors.transparent,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
+        child: SizedBox(
+          width: touchWidth,
+          height: touchHeight,
+          child: Stack(
+            clipBehavior: Clip.none,
             children: [
-              // 拖动时显示时间标签
+              // 指示器圆点：始终在固定位置，不受时间标签影响
+              Positioned(
+                bottom: indicatorBottomPadding,
+                left: 0,
+                right: 0,
+                child: Center(child: indicator),
+              ),
+              // 拖动时的时间标签：浮动在圆点上方
               if (_isDraggingPlayhead)
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-                  decoration: BoxDecoration(
-                    color: colorScheme.primary,
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  child: Text(
-                    _formatTime(_draggingPlayheadMs),
-                    style: TextStyle(
-                      fontSize: 9,
-                      fontFamily: 'monospace',
-                      color: colorScheme.onPrimary,
-                      fontWeight: FontWeight.bold,
+                Positioned(
+                  bottom: indicatorBottomPadding + (_timelineWidth + 6) + 4,
+                  left: 0,
+                  right: 0,
+                  child: Center(
+                    child: Container(
+                      padding:
+                          const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                      decoration: BoxDecoration(
+                        color: colorScheme.primary,
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Text(
+                        _formatTime(_draggingPlayheadMs),
+                        style: TextStyle(
+                          fontSize: 9,
+                          fontFamily: 'monospace',
+                          color: colorScheme.onPrimary,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
                     ),
                   ),
                 ),
-              indicator,
             ],
           ),
         ),

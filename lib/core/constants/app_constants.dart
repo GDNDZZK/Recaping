@@ -65,4 +65,17 @@ class AppConstants {
 
   /// 会话文件扩展名
   static const String recpFileExtension = '.recp';
+
+  // ==================== 外部会话配置 ====================
+
+  /// 外部会话标记 key（存储在 session.db 的 info 表中）
+  /// 值为 'true' 时表示该会话是通过外部文件打开的临时会话
+  static const String infoKeyIsExternal = 'is_external';
+
+  /// 外部会话脏标记 key（存储在 session.db 的 info 表中）
+  /// 值为 'true' 时表示该外部会话有未保存的修改
+  static const String infoKeyIsDirty = 'is_dirty';
+
+  /// 外部会话缓存子目录名
+  static const String externalCacheDir = 'external_cache';
 }

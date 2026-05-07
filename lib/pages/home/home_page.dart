@@ -163,6 +163,37 @@ class _HomePageState extends ConsumerState<HomePage> {
     }
   }
 
+  /// 处理导出会话为 .recp 文件
+  Future<void> _handleExport(Session session) async {
+    // 显示加载指示器
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const Center(child: CircularProgressIndicator()),
+    );
+
+    try {
+      final exportService = await ref.read(exportServiceProvider.future);
+      await exportService.shareSession(
+        session.sessionId,
+        title: session.title,
+      );
+      if (mounted) {
+        Navigator.of(context).pop(); // 关闭加载指示器
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('「${session.title}」导出成功')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        Navigator.of(context).pop(); // 关闭加载指示器
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('导出失败: $e')),
+        );
+      }
+    }
+  }
+
   /// 切换搜索栏展开/收起
   void _toggleSearch() {
     setState(() {
@@ -294,6 +325,15 @@ class _HomePageState extends ConsumerState<HomePage> {
                 onTap: () {
                   Navigator.pop(context);
                   _showEditDialog(session);
+                },
+              ),
+              // 导出为 .recp 文件
+              ListTile(
+                leading: const Icon(Icons.upload_file),
+                title: const Text('导出为 .recp 文件'),
+                onTap: () {
+                  Navigator.pop(context);
+                  _handleExport(session);
                 },
               ),
               // 删除

@@ -47,6 +47,9 @@ dependencies:
   # 文件选择（用于导入）
   file_picker: any
 
+  # 接收外部文件打开/分享意图
+  receive_sharing_intent: ^1.8.1
+
   # ZIP 压缩/解压（用于导出/导入 .recp 文件）
   archive: ^3.4.10
 

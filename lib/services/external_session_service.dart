@@ -1,8 +1,10 @@
 import 'dart:io';
 
 import 'package:archive/archive.dart';
+import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:sqflite/sqflite.dart';
+import 'package:uuid/uuid.dart';
 
 import '../core/constants/app_constants.dart';
 import '../core/database/database_helper.dart';
@@ -35,13 +37,16 @@ class ExternalSessionService {
   ///
   /// 返回解压后的 sessionId。
   Future<String> openExternalFile(String filePath) async {
+    debugPrint('[ExternalSessionService] openExternalFile: $filePath');
     // 1. 验证文件格式
     final file = File(filePath);
     if (!await file.exists()) {
+      debugPrint('[ExternalSessionService] 文件不存在: $filePath');
       throw Exception('文件不存在: $filePath');
     }
 
     final bytes = await file.readAsBytes();
+    debugPrint('[ExternalSessionService] 文件大小: ${bytes.length} bytes');
     if (bytes.length < 4) {
       throw Exception('文件太小，不是有效的 .recp 文件');
     }
@@ -49,40 +54,54 @@ class ExternalSessionService {
     if (bytes[0] != 0x50 || bytes[1] != 0x4B) {
       throw Exception('无效的 .recp 文件格式（不是有效的 ZIP 文件）');
     }
+    debugPrint('[ExternalSessionService] ZIP 文件头验证通过');
 
-    // 2. 解压 ZIP 文件，提取 sessionId
+    // 2. 解压 ZIP 文件，提取原始 sessionId
     final archive = ZipDecoder().decodeBytes(bytes);
 
-    String? sessionId;
+    String? originalSessionId;
     for (final archiveFile in archive) {
       final parts = archiveFile.name.split('/');
       if (parts.isNotEmpty && parts.first.isNotEmpty) {
-        sessionId = parts.first;
+        originalSessionId = parts.first;
         break;
       }
     }
 
-    if (sessionId == null || sessionId.isEmpty) {
+    if (originalSessionId == null || originalSessionId.isEmpty) {
       throw Exception('无法从文件中提取会话 ID');
     }
 
-    // 3. 检查是否已存在
+    // 3. 确定最终的 sessionId
+    // 如果原始 sessionId 已存在且不是外部会话，生成新的 UUID
+    String sessionId = originalSessionId;
     final sessionDir = await _dbHelper.sessionDirPath(sessionId);
     if (await Directory(sessionDir).exists()) {
-      // 检查是否为外部会话
       final isExternal = await isExternalSession(sessionId);
       if (isExternal) {
         // 清理旧的外部会话
         await cleanupExternalSession(sessionId);
       } else {
-        throw Exception('会话已存在: $sessionId');
+        // 会话已存在于文件列表中，生成新的 session ID
+        sessionId = const Uuid().v4();
+        debugPrint('[ExternalSessionService] 会话已存在，生成新 ID: $originalSessionId -> $sessionId');
       }
     }
 
     // 4. 解压到 sessions 目录
+    // 如果 sessionId 发生了变化，需要将归档中的原始目录名替换为新的 sessionId
     final sessionsPath = await _dbHelper.sessionsPath;
+    final needsRename = sessionId != originalSessionId;
     for (final archiveFile in archive) {
-      final outputPath = p.join(sessionsPath, archiveFile.name);
+      String relativePath = archiveFile.name;
+      if (needsRename) {
+        // 将归档中的 originalSessionId/... 替换为 sessionId/...
+        relativePath = relativePath.replaceFirst(
+          RegExp('^${RegExp.escape(originalSessionId)}/'),
+          '$sessionId/',
+        );
+      }
+      final outputPath = p.join(sessionsPath, relativePath);
       if (archiveFile.isFile) {
         await Directory(p.dirname(outputPath)).create(recursive: true);
         await File(outputPath).writeAsBytes(archiveFile.content as List<int>);
@@ -91,7 +110,18 @@ class ExternalSessionService {
       }
     }
 
-    // 5. 验证解压后的数据库结构
+    // 5. 如果 sessionId 发生了变化，更新 info 表中的 session_id
+    if (needsRename) {
+      final db = await _dbHelper.openSessionDatabase(sessionId);
+      await db.update(
+        'info',
+        {'value': sessionId},
+        where: 'key = ?',
+        whereArgs: ['session_id'],
+      );
+    }
+
+    // 6. 验证解压后的数据库结构
     try {
       final db = await _dbHelper.openSessionDatabase(sessionId);
 
@@ -123,7 +153,7 @@ class ExternalSessionService {
       throw Exception('无法读取会话数据: $e');
     }
 
-    // 6. 在 info 表中标记 is_external=true
+    // 7. 在 info 表中标记 is_external=true
     final db = await _dbHelper.openSessionDatabase(sessionId);
     await db.insert(
       'info',

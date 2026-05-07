@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../models/session.dart';
+import '../../providers/external_session_provider.dart';
 import '../../providers/session_provider.dart';
 import '../../widgets/common/session_card.dart';
 
@@ -37,7 +38,70 @@ class _HomePageState extends ConsumerState<HomePage> {
     // 页面初始化时自动加载会话列表
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(sessionListProvider.notifier).loadSessions();
+      // 检查孤立的外部会话
+      _checkOrphanedSessions();
     });
+  }
+
+  /// 检查孤立的外部会话
+  ///
+  /// 扫描 sessions 目录，找出未正常关闭的外部会话，
+  /// 弹出恢复提示对话框让用户选择恢复或放弃。
+  Future<void> _checkOrphanedSessions() async {
+    final orphanedIds = await ref
+        .read(externalSessionProvider.notifier)
+        .checkAndRecoverOrphanedSessions();
+
+    if (orphanedIds.isNotEmpty && mounted) {
+      _showOrphanedSessionDialog(orphanedIds);
+    }
+  }
+
+  /// 显示孤立会话恢复对话框
+  void _showOrphanedSessionDialog(List<String> orphanedIds) {
+    showDialog(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('发现未完成的会话'),
+        content: Text(
+          '上次打开的文件会话未正常关闭，是否恢复？\n\n'
+          '共发现 ${orphanedIds.length} 个未完成的会话。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () async {
+              Navigator.pop(dialogContext);
+              // 放弃所有孤立会话
+              for (final id in orphanedIds) {
+                await ref
+                    .read(externalSessionProvider.notifier)
+                    .discardOrphanedSession(id);
+              }
+            },
+            child: const Text('全部放弃'),
+          ),
+          FilledButton(
+            onPressed: () async {
+              Navigator.pop(dialogContext);
+              // 恢复所有孤立会话到永久列表
+              for (final id in orphanedIds) {
+                await ref
+                    .read(externalSessionProvider.notifier)
+                    .recoverOrphanedSession(id);
+              }
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('已恢复 ${orphanedIds.length} 个会话'),
+                  ),
+                );
+              }
+            },
+            child: const Text('恢复到会话列表'),
+          ),
+        ],
+      ),
+    );
   }
 
   @override

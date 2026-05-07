@@ -6,6 +6,14 @@ allprojects {
         google()
         mavenCentral()
     }
+
+    plugins.withType<JavaPlugin> {
+        configure<JavaPluginExtension> {
+            toolchain {
+                languageVersion.set(JavaLanguageVersion.of(21))
+            }
+        }
+    }
 }
 
 val newBuildDir: Directory =

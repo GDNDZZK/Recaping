@@ -75,5 +75,51 @@
 	<!-- 相册权限 -->
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Recaping 需要访问相册以保存和选择照片</string>
+	<!-- 文件关联：支持打开 .recp 文件 -->
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Recaping Session</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Owner</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>com.recaping.recp</string>
+			</array>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>recp</string>
+			</array>
+		</dict>
+	</array>
+	<!-- UTI 声明 -->
+	<key>UTImportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>com.recaping.recp</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+				<string>public.archive</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>Recaping Session File</string>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>recp</string>
+				</array>
+				<key>public.mime-type</key>
+				<array>
+					<string>application/x-recaping</string>
+				</array>
+			</dict>
+		</dict>
+	</array>
 </dict>
 </plist>

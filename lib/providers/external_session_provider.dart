@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/database/database_helper.dart';
@@ -94,8 +95,12 @@ class ExternalSessionNotifier extends StateNotifier<ExternalSessionState> {
   /// 处理过程中会设置 isLoading 状态，成功后设置 activeSessionId。
   /// 返回解压后的 sessionId，失败返回 null。
   Future<String?> handleIncomingFile(String filePath) async {
+    debugPrint('[ExternalSession] handleIncomingFile 开始: $filePath');
     // 防止并发处理
-    if (_isProcessing) return null;
+    if (_isProcessing) {
+      debugPrint('[ExternalSession] 正在处理其他文件，跳过');
+      return null;
+    }
     _isProcessing = true;
 
     try {
@@ -105,8 +110,11 @@ class ExternalSessionNotifier extends StateNotifier<ExternalSessionState> {
         error: null,
       );
 
+      debugPrint('[ExternalSession] 等待 ExternalSessionService 初始化...');
       final service = await _ref.read(externalSessionServiceProvider.future);
+      debugPrint('[ExternalSession] Service 就绪，开始打开文件...');
       final sessionId = await service.openExternalFile(filePath);
+      debugPrint('[ExternalSession] 文件打开成功，sessionId=$sessionId');
 
       if (mounted) {
         state = ExternalSessionState(
@@ -117,7 +125,9 @@ class ExternalSessionNotifier extends StateNotifier<ExternalSessionState> {
       }
 
       return sessionId;
-    } catch (e) {
+    } catch (e, stackTrace) {
+      debugPrint('[ExternalSession] handleIncomingFile 失败: $e');
+      debugPrint('[ExternalSession] 堆栈: $stackTrace');
       if (mounted) {
         state = ExternalSessionState(
           isLoading: false,

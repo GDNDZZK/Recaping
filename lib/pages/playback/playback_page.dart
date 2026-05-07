@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import '../../models/bookmark.dart';
 import '../../models/text_note.dart';
 import '../../models/timeline_event.dart';
+import '../../providers/external_session_provider.dart';
 import '../../providers/playback_provider.dart';
 import '../../providers/session_provider.dart';
 import '../../services/audio_playback_service.dart';
@@ -14,12 +15,21 @@ import '../../widgets/timeline/recording_timeline.dart';
 ///
 /// 提供音频回放、时间轴事件同步显示等功能。
 /// 复用录音页面的布局风格：顶部状态区 + 中部时间轴 + 底部控制栏。
-/// Author: GDNDZZK
+///
+/// 当 [isExternal] 为 true 时，表示该会话是从外部 .recp 文件打开的临时会话，
+/// 此时 AppBar 会显示保存按钮，退出时会弹出保存确认对话框。
 class PlaybackPage extends ConsumerStatefulWidget {
   /// 要回放的会话 ID
   final String sessionId;
 
-  const PlaybackPage({super.key, required this.sessionId});
+  /// 是否为外部打开的临时会话
+  final bool isExternal;
+
+  const PlaybackPage({
+    super.key,
+    required this.sessionId,
+    this.isExternal = false,
+  });
 
   @override
   ConsumerState<PlaybackPage> createState() => _PlaybackPageState();
@@ -43,7 +53,9 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
   @override
   void initState() {
     super.initState();
+    debugPrint('[PlaybackPage] initState: sessionId=${widget.sessionId}, isExternal=${widget.isExternal}');
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      debugPrint('[PlaybackPage] addPostFrameCallback: calling _loadSessionData');
       _loadSessionData();
     });
   }
@@ -52,11 +64,6 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
   void dispose() {
     debugPrint('[PlaybackPage] dispose() called');
     // 使用缓存的服务引用调用 stop()，避免 dispose 时 ref 已失效。
-    // Riverpod 的 ConsumerState 在 dispose() 时 ref 已不可用
-    // （抛出 "Cannot use ref after the widget was disposed"），
-    // 因此在 build() 中提前缓存了服务引用。
-    // stop() 的同步部分（递增 generation、取消 Timer、重置位置、通知 UI）
-    // 会立即执行，确保所有 in-flight 异步操作失效。
     final service = _cachedService;
     if (service != null) {
       debugPrint('[PlaybackPage] calling service.stop(), current state=${service.state}');
@@ -69,12 +76,16 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
 
   /// 加载会话数据
   Future<void> _loadSessionData() async {
+    debugPrint('[PlaybackPage] _loadSessionData: sessionId=${widget.sessionId}');
     setState(() => _isLoading = true);
     try {
       await ref
           .read(playbackControlProvider.notifier)
           .loadSession(widget.sessionId);
-    } catch (e) {
+      debugPrint('[PlaybackPage] _loadSessionData: 加载成功');
+    } catch (e, stackTrace) {
+      debugPrint('[PlaybackPage] _loadSessionData 失败: $e');
+      debugPrint('[PlaybackPage] 堆栈: $stackTrace');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('加载会话失败: $e')),
@@ -90,7 +101,6 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
   @override
   Widget build(BuildContext context) {
     // 缓存服务引用：ref 在 build() 中始终有效，但在 dispose() 中已失效。
-    // 使用 ??= 确保只赋值一次，后续 build() 调用不会重复赋值。
     _cachedService ??= ref.read(playbackServiceProvider);
 
     final theme = Theme.of(context);
@@ -118,19 +128,18 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
     // 监听时间轴事件
     final eventsAsync = ref.watch(playbackEventsProvider);
 
+    // 监听外部会话状态（仅外部模式）
+    final externalState = widget.isExternal
+        ? ref.watch(externalSessionProvider)
+        : null;
+
     // 加载中状态
     if (_isLoading || playbackStateAsync.isLoading) {
       return Scaffold(
         appBar: AppBar(
           leading: IconButton(
             icon: const Icon(Icons.arrow_back),
-            onPressed: () {
-              if (context.canPop()) {
-                context.pop();
-              } else {
-                context.go('/');
-              }
-            },
+            onPressed: () => _handleBack(),
           ),
           title: const Text('加载中...'),
         ),
@@ -146,13 +155,7 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
         appBar: AppBar(
           leading: IconButton(
             icon: const Icon(Icons.arrow_back),
-            onPressed: () {
-              if (context.canPop()) {
-                context.pop();
-              } else {
-                context.go('/');
-              }
-            },
+            onPressed: () => _handleBack(),
           ),
           title: const Text('回放'),
         ),
@@ -205,8 +208,14 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
                 ? events.map((e) => e.timestamp).reduce((a, b) => a > b ? a : b)
                 : 0));
 
-    return Scaffold(
-      appBar: _buildAppBar(context, theme, colorScheme, accentColor),
+    final scaffold = Scaffold(
+      appBar: _buildAppBar(
+        context,
+        theme,
+        colorScheme,
+        accentColor,
+        externalState?.isDirty ?? false,
+      ),
       body: Column(
         children: [
           // 顶部播放状态区域
@@ -240,13 +249,29 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
         ],
       ),
     );
+
+    // 外部会话模式：拦截返回操作，检查是否有未保存修改
+    if (widget.isExternal) {
+      return PopScope(
+        canPop: !(externalState?.isDirty ?? false),
+        onPopInvokedWithResult: (didPop, result) {
+          if (!didPop) {
+            _showSaveConfirmDialog();
+          } else {
+            // 正常退出（无修改），清理外部会话
+            _cleanupExternalSession();
+          }
+        },
+        child: scaffold,
+      );
+    }
+
+    return scaffold;
   }
 
   // ==================== 顶部播放状态区域 ====================
 
   /// 构建顶部播放状态区域
-  ///
-  /// 参考录音页面的状态区域样式，显示播放状态、时间和进度条。
   Widget _buildPlaybackStatusArea(
     BuildContext context,
     PlaybackState? playbackState,
@@ -344,8 +369,6 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
   // ==================== 底部播放控制栏 ====================
 
   /// 构建底部播放控制栏
-  ///
-  /// 替代原来的 AudioPlayerControls，简化控制栏布局。
   Widget _buildPlaybackBottomBar(
     BuildContext context,
     bool isPlaying,
@@ -470,7 +493,6 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
   Widget _buildSpeedButton(double speed) {
     return TextButton(
       onPressed: () {
-        // 切换速度：0.5x -> 0.75x -> 1.0x -> 1.25x -> 1.5x -> 2.0x -> 0.5x
         const speeds = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
         final currentIndex = speeds.indexOf(speed);
         final nextIndex = (currentIndex + 1) % speeds.length;
@@ -483,25 +505,53 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
   // ==================== AppBar ====================
 
   /// 构建 AppBar
+  ///
+  /// [isDirty] 外部会话是否有未保存的修改（仅外部模式使用）
   PreferredSizeWidget _buildAppBar(
     BuildContext context,
     ThemeData theme,
     ColorScheme colorScheme,
     Color accentColor,
+    bool isDirty,
   ) {
     return AppBar(
       leading: IconButton(
         icon: const Icon(Icons.arrow_back),
-        onPressed: () {
-          if (context.canPop()) {
-            context.pop();
-          } else {
-            context.go('/');
-          }
-        },
+        onPressed: () => _handleBack(),
       ),
-      title: const Text('回放'),
+      title: widget.isExternal
+          ? Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text('回放'),
+                const SizedBox(width: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: colorScheme.tertiaryContainer,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    '外部文件',
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: colorScheme.onTertiaryContainer,
+                    ),
+                  ),
+                ),
+              ],
+            )
+          : const Text('回放'),
       actions: [
+        // 外部会话模式：保存按钮
+        if (widget.isExternal)
+          IconButton(
+            icon: Icon(
+              Icons.save,
+              color: isDirty ? accentColor : null,
+            ),
+            tooltip: '保存到会话列表',
+            onPressed: _handleSaveExternalSession,
+          ),
         // 更多操作菜单
         PopupMenuButton<String>(
           icon: const Icon(Icons.more_vert),
@@ -518,16 +568,18 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
                 ],
               ),
             ),
-            const PopupMenuItem(
-              value: 'delete',
-              child: Row(
-                children: [
-                  Icon(Icons.delete_outline, size: 20),
-                  SizedBox(width: 12),
-                  Text('删除会话'),
-                ],
+            // 外部会话不显示删除选项
+            if (!widget.isExternal)
+              const PopupMenuItem(
+                value: 'delete',
+                child: Row(
+                  children: [
+                    Icon(Icons.delete_outline, size: 20),
+                    SizedBox(width: 12),
+                    Text('删除会话'),
+                  ],
+                ),
               ),
-            ),
             const PopupMenuItem(
               value: 'export',
               child: Row(
@@ -548,19 +600,104 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
                 ],
               ),
             ),
-            const PopupMenuItem(
-              value: 'ai',
-              child: Row(
-                children: [
-                  Icon(Icons.auto_awesome, size: 20),
-                  SizedBox(width: 12),
-                  Text('AI 功能'),
-                ],
+            // 外部会话不显示 AI 功能（需要永久会话）
+            if (!widget.isExternal)
+              const PopupMenuItem(
+                value: 'ai',
+                child: Row(
+                  children: [
+                    Icon(Icons.auto_awesome, size: 20),
+                    SizedBox(width: 12),
+                    Text('AI 功能'),
+                  ],
+                ),
               ),
-            ),
           ],
         ),
       ],
+    );
+  }
+
+  // ==================== 外部会话相关 ====================
+
+  /// 处理返回操作
+  void _handleBack() {
+    if (widget.isExternal) {
+      final externalState = ref.read(externalSessionProvider);
+      if (externalState.isDirty) {
+        _showSaveConfirmDialog();
+      } else {
+        _cleanupExternalSession();
+        if (context.canPop()) {
+          context.pop();
+        } else {
+          context.go('/');
+        }
+      }
+    } else {
+      if (context.canPop()) {
+        context.pop();
+      } else {
+        context.go('/');
+      }
+    }
+  }
+
+  /// 清理外部会话
+  Future<void> _cleanupExternalSession() async {
+    if (!widget.isExternal) return;
+    await ref.read(externalSessionProvider.notifier).cleanup();
+  }
+
+  /// 保存外部会话到永久列表
+  Future<void> _handleSaveExternalSession() async {
+    final success = await ref.read(externalSessionProvider.notifier).saveSession();
+    if (success && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('已保存到会话列表')),
+      );
+      // 保存成功后，导航到普通回放页面
+      if (context.canPop()) {
+        context.pop();
+      }
+      context.push('/playback/${widget.sessionId}');
+    } else if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('保存失败')),
+      );
+    }
+  }
+
+  /// 显示保存确认对话框
+  void _showSaveConfirmDialog() {
+    showDialog(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('未保存的修改'),
+        content: const Text('您有未保存的修改，是否保存到会话列表？'),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(dialogContext);
+              // 放弃修改，清理并退出
+              _cleanupExternalSession();
+              if (context.canPop()) {
+                context.pop();
+              } else {
+                context.go('/');
+              }
+            },
+            child: const Text('放弃修改'),
+          ),
+          FilledButton(
+            onPressed: () {
+              Navigator.pop(dialogContext);
+              _handleSaveExternalSession();
+            },
+            child: const Text('保存'),
+          ),
+        ],
+      ),
     );
   }
 
@@ -570,6 +707,7 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
   ///
   /// 使用 [EventDetailPanel] 显示事件详情，支持编辑和删除操作。
   /// 录音事件仅跳转播放位置，不显示详情面板。
+  /// 外部会话模式下，编辑和删除操作会标记脏状态。
   void _handleEventDetail(TimelineEvent event) {
     // 录音事件仅跳转播放位置
     if (event.type == TimelineEventType.audio) {
@@ -613,10 +751,18 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
           );
           await eventsNotifier.updateBookmark(bookmark);
         }
+        // 外部会话模式：标记脏状态
+        if (widget.isExternal) {
+          await ref.read(externalSessionProvider.notifier).markDirty();
+        }
       },
       onDelete: () async {
         final eventsNotifier = ref.read(playbackEventsProvider.notifier);
         await eventsNotifier.removeEvent(event.id, event.type);
+        // 外部会话模式：标记脏状态
+        if (widget.isExternal) {
+          await ref.read(externalSessionProvider.notifier).markDirty();
+        }
       },
     );
   }
@@ -701,7 +847,7 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
 
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (dialogContext) => AlertDialog(
         title: const Text('编辑标题'),
         content: TextField(
           controller: titleController,
@@ -714,7 +860,7 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () => Navigator.pop(dialogContext),
             child: const Text('取消'),
           ),
           FilledButton(
@@ -724,9 +870,13 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
                 await ref
                     .read(sessionListProvider.notifier)
                     .updateSession(session.copyWith(title: newTitle));
+                // 外部会话模式：标记脏状态
+                if (widget.isExternal) {
+                  await ref.read(externalSessionProvider.notifier).markDirty();
+                }
               }
-              if (context.mounted) {
-                Navigator.pop(context);
+              if (dialogContext.mounted) {
+                Navigator.pop(dialogContext);
               }
             },
             child: const Text('保存'),
@@ -740,25 +890,25 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
   void _showDeleteConfirmDialog() {
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (dialogContext) => AlertDialog(
         title: const Text('删除会话'),
         content: const Text('确定要删除此会话吗？删除后无法恢复。'),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () => Navigator.pop(dialogContext),
             child: const Text('取消'),
           ),
           FilledButton(
             style: FilledButton.styleFrom(
-              backgroundColor: Theme.of(context).colorScheme.error,
+              backgroundColor: Theme.of(dialogContext).colorScheme.error,
             ),
             onPressed: () async {
-              Navigator.pop(context);
+              Navigator.pop(dialogContext);
               await ref
                   .read(sessionListProvider.notifier)
                   .deleteSession(widget.sessionId);
               if (mounted) {
-                this.context.pop();
+                context.pop();
               }
             },
             child: const Text('删除'),

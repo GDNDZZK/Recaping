@@ -661,8 +661,12 @@ class _RecordingTimelineState extends State<RecordingTimeline>
     int totalMs,
     List<RecordingSegment> effectiveSegments,
   ) {
-    // 计算总高度：基于总时间 + 底部额外空间
-    final contentHeight = totalMs > 0 ? _msToY(totalMs) + 100.0 : 100.0;
+    // 计算总高度：基于总时间 + 底部额外空间，确保覆盖当前播放位置指示器
+    final baseContentHeight = totalMs > 0 ? _msToY(totalMs) + 100.0 : 100.0;
+    final indicatorY = (_effectivePositionMs > 0 || widget.isPlaybackMode)
+        ? _msToY(_effectivePositionMs) + 50.0
+        : 0.0;
+    final contentHeight = math.max(baseContentHeight, indicatorY);
     final viewHeight = MediaQuery.of(context).size.height * 0.3;
     final totalHeight = contentHeight > viewHeight ? contentHeight : viewHeight;
 
@@ -702,8 +706,8 @@ class _RecordingTimelineState extends State<RecordingTimeline>
               // 6. 事件标记卡片
               ..._buildEventMarkers(theme, colorScheme),
 
-              // 7. 当前位置指示器（回放模式使用播放位置）
-              if (_effectivePositionMs > 0)
+              // 7. 当前位置指示器（回放模式下始终显示）
+              if (_effectivePositionMs > 0 || widget.isPlaybackMode)
                 _buildCurrentPositionIndicator(_effectivePositionMs),
             ],
           ),

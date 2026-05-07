@@ -183,10 +183,14 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
     final session = sessionList.valueOrNull
         ?.where((s) => s.sessionId == widget.sessionId)
         .firstOrNull;
+    // 优先使用音频服务的实际时长，避免事件时间戳不完整导致高度不足
+    final audioDuration = ref.read(playbackDurationProvider);
     final totalDurationMs = session?.duration ??
-        (events.isNotEmpty
-            ? events.map((e) => e.timestamp).reduce((a, b) => a > b ? a : b)
-            : 0);
+        (audioDuration.inMilliseconds > 0
+            ? audioDuration.inMilliseconds
+            : (events.isNotEmpty
+                ? events.map((e) => e.timestamp).reduce((a, b) => a > b ? a : b)
+                : 0));
 
     return Scaffold(
       appBar: _buildAppBar(context, theme, colorScheme, accentColor),

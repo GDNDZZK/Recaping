@@ -69,6 +69,9 @@ class AudioPlaybackService {
   /// 防重入锁：正在切换 chunk 时为 true
   bool _isTransitioning = false;
 
+  /// 是否已停止（阻止 stop 后的异步操作继续执行）
+  bool _isStopped = true;
+
   // ==================== Session 信息 ====================
 
   String? _currentSessionId;
@@ -120,6 +123,14 @@ class AudioPlaybackService {
     String sessionId,
     SessionDatabase db,
   ) async {
+    // 先停止之前的所有异步操作
+    _isStopped = true;
+    _stopwatch.stop();
+    _stopwatch.reset();
+    _timelineTimer?.cancel();
+    _timelineTimer = null;
+    _isTransitioning = false;
+
     _setState(PlaybackState.loading);
     _currentSessionId = sessionId;
     _sessionDb = db;
@@ -127,14 +138,17 @@ class AudioPlaybackService {
     try {
       // 加载会话元信息获取总时长
       final session = await db.getSessionInfo();
+      if (_isDisposed) return;
       _totalDurationMs = session?.duration ?? 0;
 
       // 从数据库加载所有音频分片的元数据
       final allChunks = await db.getAudioChunks();
+      if (_isDisposed) return;
 
       if (allChunks.isEmpty) {
         _currentTotalMs = 0;
         _activeChunkIndex = -1;
+        _isStopped = false;
         _setState(PlaybackState.idle);
         return;
       }
@@ -167,8 +181,10 @@ class AudioPlaybackService {
       _currentTotalMs = 0;
       _activeChunkIndex = -1;
 
+      _isStopped = false;
       _setState(PlaybackState.paused);
     } catch (e) {
+      _isStopped = false;
       _setState(PlaybackState.error);
       throw Exception('Failed to load session audio: $e');
     }
@@ -178,6 +194,9 @@ class AudioPlaybackService {
   Future<void> play() async {
     if (_state == PlaybackState.playing) return;
     if (_currentSessionId == null) return;
+
+    // 重置停止标志，允许异步操作执行
+    _isStopped = false;
 
     // 如果已在末尾或超过末尾，从头开始
     if (_currentTotalMs >= _totalDurationMs && _totalDurationMs > 0) {
@@ -195,7 +214,8 @@ class AudioPlaybackService {
     // 立即处理当前位置
     await _handleTimelinePosition();
 
-    // 启动定时器，每 50ms 更新一次
+    // 启动定时器前再次检查是否已被停止
+    if (_isStopped) return;
     _timelineTimer?.cancel();
     _timelineTimer = Timer.periodic(const Duration(milliseconds: 50), _onTick);
   }
@@ -219,7 +239,11 @@ class AudioPlaybackService {
   }
 
   /// 完全停止播放并重置状态
+  ///
+  /// 设置 [_isStopped] 标志以阻止所有 in-flight 异步操作继续执行。
   Future<void> stop() async {
+    // 首先设置停止标志，阻止所有 in-flight 异步操作
+    _isStopped = true;
     _stopwatch.stop();
     _stopwatch.reset();
     _timelineTimer?.cancel();
@@ -318,6 +342,7 @@ class AudioPlaybackService {
   Future<void> dispose() async {
     if (_isDisposed) return;
     _isDisposed = true;
+    _isStopped = true;
 
     _stopwatch.stop();
     _timelineTimer?.cancel();
@@ -337,7 +362,7 @@ class AudioPlaybackService {
 
   /// 定时器回调
   void _onTick(Timer timer) {
-    if (_isDisposed) return;
+    if (_isDisposed || _isStopped) return;
 
     _currentTotalMs =
         _elapsedBeforeResume + (_stopwatch.elapsedMilliseconds * _speed).toInt();
@@ -349,7 +374,7 @@ class AudioPlaybackService {
       return;
     }
 
-    // 处理当前位置
+    // 处理当前位置（fire-and-forget，但内部会检查 _isStopped）
     _handleTimelinePosition();
 
     // 通知位置更新
@@ -359,15 +384,18 @@ class AudioPlaybackService {
   /// 处理当前时间轴位置
   ///
   /// 判断当前时间落在哪个 chunk（或静音区间），必要时切换 chunk。
+  /// 在每个 await 点之后检查 [_isStopped]，防止 stop() 后继续执行。
   Future<void> _handleTimelinePosition() async {
+    if (_isStopped) return;
     final chunkIndex = _findChunkAtTotalTime(_currentTotalMs);
 
     if (chunkIndex != _activeChunkIndex) {
       await _transitionToChunk(chunkIndex);
+      if (_isStopped) return;
     }
 
     // 如果在音频 chunk 内且正在播放，同步播放位置
-    if (_activeChunkIndex >= 0 && _state == PlaybackState.playing) {
+    if (_activeChunkIndex >= 0 && _state == PlaybackState.playing && !_isStopped) {
       final chunk = _chunks[_activeChunkIndex];
       final hasTotalTime = chunk.totalStartTime > 0 || chunk.totalEndTime > 0;
       final chunkStart = hasTotalTime ? chunk.totalStartTime : chunk.startTime;
@@ -388,8 +416,10 @@ class AudioPlaybackService {
   }
 
   /// 切换到指定 chunk
+  ///
+  /// 在 await 后检查 [_isStopped]，防止 stop() 后继续加载/播放。
   Future<void> _transitionToChunk(int newIndex) async {
-    if (newIndex == _activeChunkIndex || _isTransitioning) return;
+    if (newIndex == _activeChunkIndex || _isTransitioning || _isStopped) return;
     _isTransitioning = true;
     try {
       _activeChunkIndex = newIndex; // 在加载前更新，防止重复加载
@@ -407,21 +437,28 @@ class AudioPlaybackService {
         await _loadAndPlayChunk(chunk);
       }
     } finally {
-      _isTransitioning = false;
+      // 只在未停止时重置过渡标志
+      if (!_isStopped) {
+        _isTransitioning = false;
+      }
     }
   }
 
   /// 加载并播放单个 chunk
+  ///
+  /// 在每个 await 点之后检查 [_isStopped]，确保 stop() 后不会触发播放。
   Future<void> _loadAndPlayChunk(AudioChunk chunk) async {
     try {
       // 构建文件绝对路径
       final filePath = await _getChunkFilePath(chunk);
+      if (_isStopped) return;
       final file = File(filePath);
 
       if (!await file.exists()) {
         // 文件不存在，当作静音处理
         return;
       }
+      if (_isStopped) return;
 
       // 计算在 chunk 内的偏移
       final hasTotalTime = chunk.totalStartTime > 0 || chunk.totalEndTime > 0;
@@ -430,15 +467,18 @@ class AudioPlaybackService {
 
       // 加载 chunk 文件
       await _player.setFilePath(filePath);
+      if (_isStopped) return;
       await _player.setSpeed(_speed);
+      if (_isStopped) return;
 
       // seek 到正确位置
       if (offsetInChunk > 0) {
         await _player.seek(Duration(milliseconds: offsetInChunk));
+        if (_isStopped) return;
       }
 
-      // 如果正在播放，开始播放（不等待，fire-and-forget）
-      if (_state == PlaybackState.playing) {
+      // 如果正在播放且未被停止，开始播放
+      if (_state == PlaybackState.playing && !_isStopped) {
         _player.play();
       }
     } catch (e) {

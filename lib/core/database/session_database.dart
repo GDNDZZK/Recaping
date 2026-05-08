@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:sqflite/sqflite.dart';
 
@@ -19,10 +20,11 @@ import 'database_helper.dart';
 /// 数据库只存储元数据和文件路径引用，实际媒体数据存储在文件系统中。
 /// Author: GDNDZZK
 class SessionDatabase {
-  final Database _db;
+  Database _db;
   final String _sessionId;
+  final DatabaseHelper _dbHelper;
 
-  SessionDatabase._(this._db, this._sessionId);
+  SessionDatabase._(this._db, this._sessionId, this._dbHelper);
 
   /// 创建 SessionDatabase 实例
   ///
@@ -30,12 +32,21 @@ class SessionDatabase {
   static Future<SessionDatabase> create(String sessionId) async {
     final dbHelper = DatabaseHelper();
     final db = await dbHelper.openSessionDatabase(sessionId);
-    return SessionDatabase._(db, sessionId);
+    return SessionDatabase._(db, sessionId, dbHelper);
   }
 
   /// 从已有的 Database 实例创建
   static SessionDatabase fromDatabase(Database db, String sessionId) {
-    return SessionDatabase._(db, sessionId);
+    return SessionDatabase._(db, sessionId, DatabaseHelper());
+  }
+
+  /// 确保数据库仍然打开，如果已关闭则重新打开
+  Future<void> _ensureDatabaseOpen() async {
+    if (!_db.isOpen) {
+      debugPrint('[SessionDatabase] _ensureDatabaseOpen($_sessionId): 数据库已关闭，重新打开');
+      _db = await _dbHelper.openSessionDatabase(_sessionId);
+      debugPrint('[SessionDatabase] _ensureDatabaseOpen($_sessionId): 数据库已重新打开');
+    }
   }
 
   /// 获取会话目录的绝对路径
@@ -96,8 +107,11 @@ class SessionDatabase {
 
   /// 获取会话元信息
   Future<Session?> getSessionInfo() async {
+    await _ensureDatabaseOpen();
+    debugPrint('[SessionDatabase] getSessionInfo($_sessionId): 开始获取会话信息, db.isOpen=${_db.isOpen}');
     final info = await getAllInfo();
     if (info.isEmpty || !info.containsKey('session_id')) return null;
+    debugPrint('[SessionDatabase] getSessionInfo($_sessionId): 会话信息获取成功');
     return Session.fromInfoMap(info);
   }
 
@@ -110,10 +124,13 @@ class SessionDatabase {
 
   /// 获取所有音频分片（按序号排序）
   Future<List<AudioChunk>> getAudioChunks() async {
+    await _ensureDatabaseOpen();
+    debugPrint('[SessionDatabase] getAudioChunks($_sessionId): 开始获取音频分片, db.isOpen=${_db.isOpen}');
     final results = await _db.query(
       'audio_chunks',
       orderBy: 'chunk_index ASC',
     );
+    debugPrint('[SessionDatabase] getAudioChunks($_sessionId): 获取到 ${results.length} 个音频分片');
     return results.map((map) => AudioChunk.fromMap(map)).toList();
   }
 

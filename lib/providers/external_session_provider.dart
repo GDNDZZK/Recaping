@@ -1,6 +1,11 @@
+import 'dart:io';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:path/path.dart' as p;
 
+import '../core/constants/app_constants.dart';
 import '../core/database/database_helper.dart';
 import '../services/export_service.dart';
 import '../services/external_session_service.dart';
@@ -22,6 +27,9 @@ class ExternalSessionState {
   /// 正在加载的文件路径
   final String? loadingFilePath;
 
+  /// 原始外部文件路径，用于保存回文件
+  final String? sourceFilePath;
+
   /// 错误信息
   final String? error;
 
@@ -30,6 +38,7 @@ class ExternalSessionState {
     this.isDirty = false,
     this.isLoading = false,
     this.loadingFilePath,
+    this.sourceFilePath,
     this.error,
   });
 
@@ -39,6 +48,7 @@ class ExternalSessionState {
         isDirty = false,
         isLoading = false,
         loadingFilePath = null,
+        sourceFilePath = null,
         error = null;
 
   /// 复制并修改部分字段
@@ -47,6 +57,7 @@ class ExternalSessionState {
     bool? isDirty,
     bool? isLoading,
     String? loadingFilePath,
+    String? sourceFilePath,
     String? error,
   }) {
     return ExternalSessionState(
@@ -54,6 +65,7 @@ class ExternalSessionState {
       isDirty: isDirty ?? this.isDirty,
       isLoading: isLoading ?? this.isLoading,
       loadingFilePath: loadingFilePath ?? this.loadingFilePath,
+      sourceFilePath: sourceFilePath ?? this.sourceFilePath,
       error: error,
     );
   }
@@ -121,6 +133,7 @@ class ExternalSessionNotifier extends StateNotifier<ExternalSessionState> {
           activeSessionId: sessionId,
           isDirty: false,
           isLoading: false,
+          sourceFilePath: filePath,
         );
       }
 
@@ -141,15 +154,24 @@ class ExternalSessionNotifier extends StateNotifier<ExternalSessionState> {
   }
 
   /// 标记当前外部会话为脏状态（有未保存的修改）
+  ///
+  /// 先更新内存状态确保 UI 能立即响应，再异步持久化到数据库。
+  /// 即使数据库写入失败，内存中的 isDirty 标记仍然有效。
   Future<void> markDirty() async {
     final sessionId = state.activeSessionId;
     if (sessionId == null) return;
 
-    final service = await _ref.read(externalSessionServiceProvider.future);
-    await service.markDirty(sessionId);
-
+    // 先更新内存状态，确保 UI 能正确响应（如返回时的保存确认弹窗）
     if (mounted) {
       state = state.copyWith(isDirty: true);
+    }
+
+    // 再持久化到数据库（失败不影响内存状态）
+    try {
+      final service = await _ref.read(externalSessionServiceProvider.future);
+      await service.markDirty(sessionId);
+    } catch (e) {
+      debugPrint('[ExternalSession] markDirty 持久化失败: $e');
     }
   }
 
@@ -244,6 +266,152 @@ class ExternalSessionNotifier extends StateNotifier<ExternalSessionState> {
     } catch (_) {
       // 忽略清理失败
     }
+  }
+
+  /// 保存回原始外部文件
+  ///
+  /// 尝试将会话重新打包为 .recp 文件并写回 [state.sourceFilePath]。
+  /// 成功返回 true 并清除脏标记，失败返回 false。
+  Future<bool> saveBackToFile() async {
+    final sessionId = state.activeSessionId;
+    final targetPath = state.sourceFilePath;
+    if (sessionId == null || targetPath == null) return false;
+
+    try {
+      final service = await _ref.read(externalSessionServiceProvider.future);
+      final success = await service.saveBackToFile(sessionId, targetPath);
+      if (success && mounted) {
+        state = state.copyWith(isDirty: false);
+      }
+      return success;
+    } catch (e) {
+      debugPrint('[ExternalSession] saveBackToFile 失败: $e');
+      return false;
+    }
+  }
+
+  /// 另存为文件到指定目录
+  ///
+  /// 使用 ExportService 重新打包为 .recp 文件，
+  /// 然后保存到指定的目录。
+  /// 成功返回保存路径，失败返回 null。
+  ///
+  /// [directory] 目标目录路径
+  /// [fileName] 文件名，必须包含 .recp 扩展名
+  Future<String?> saveAsFileToDirectory(String directory, String fileName) async {
+    final sessionId = state.activeSessionId;
+    if (sessionId == null) return null;
+
+    try {
+      // 1. 使用 ExportService 生成临时 .recp 文件
+      final exportService = await _ref.read(exportServiceProvider.future);
+      final exportPath = await exportService.exportSession(sessionId);
+      debugPrint('[ExternalSession] saveAsFileToDirectory: 临时导出文件 $exportPath');
+
+      final exportFile = File(exportPath);
+      if (!await exportFile.exists()) {
+        debugPrint('[ExternalSession] saveAsFileToDirectory: 临时导出文件不存在');
+        return null;
+      }
+
+      // 2. 确保文件名以 .recp 结尾
+      if (!fileName.endsWith(AppConstants.recpFileExtension)) {
+        fileName = '$fileName${AppConstants.recpFileExtension}';
+      }
+
+      // 3. 拼接目标路径
+      final targetPath = p.join(directory, fileName);
+      debugPrint('[ExternalSession] saveAsFileToDirectory: 目标路径 $targetPath');
+
+      // 4. 将临时文件复制到目标路径
+      await exportFile.copy(targetPath);
+      debugPrint('[ExternalSession] saveAsFileToDirectory: 文件复制成功');
+
+      // 5. 删除临时文件
+      try {
+        await exportFile.delete();
+        debugPrint('[ExternalSession] saveAsFileToDirectory: 临时文件已删除');
+      } catch (e) {
+        debugPrint('[ExternalSession] saveAsFileToDirectory: 删除临时文件失败（可忽略）: $e');
+      }
+
+      debugPrint('[ExternalSession] saveAsFileToDirectory: 文件保存成功 $targetPath');
+
+      if (mounted) {
+        state = state.copyWith(isDirty: false);
+      }
+      return targetPath;
+    } catch (e) {
+      debugPrint('[ExternalSession] saveAsFileToDirectory 失败: $e');
+      return null;
+    }
+  }
+
+  /// 另存为文件
+  ///
+  /// 使用 ExportService 重新打包为 .recp 文件，
+  /// 然后让用户选择保存目录，手动复制文件到目标路径。
+  /// 成功返回保存路径，失败返回 null。
+  ///
+  /// [fileName] 可选参数，如果提供则使用该文件名，否则使用默认文件名。
+  /// 默认文件名优先使用原始打开文件的文件名，
+  /// 其次使用会话标题，最后回退到 session ID。
+  ///
+  /// 此方法使用 `FilePicker.platform.getDirectoryPath()` 选择目录，
+  /// 完全绕过 SAF 的 MIME 类型检测，避免 .zip 后缀问题。
+  Future<String?> saveAsFile({String? fileName}) async {
+    final sessionId = state.activeSessionId;
+    if (sessionId == null) return null;
+
+    try {
+      // 1. 让用户选择保存目录
+      final selectedDirectory = await FilePicker.getDirectoryPath(
+        dialogTitle: '选择保存目录',
+      );
+
+      if (selectedDirectory == null) {
+        debugPrint('[ExternalSession] saveAsFile: 用户取消了目录选择');
+        return null;
+      }
+
+      debugPrint('[ExternalSession] saveAsFile: 用户选择目录 $selectedDirectory');
+
+      // 2. 确定文件名：如果未提供，则使用默认文件名
+      if (fileName == null || fileName.isEmpty) {
+        fileName = _getDefaultFileName(sessionId);
+      }
+
+      // 3. 调用 saveAsFileToDirectory 保存文件
+      return await saveAsFileToDirectory(selectedDirectory, fileName);
+    } catch (e) {
+      debugPrint('[ExternalSession] saveAsFile 失败: $e');
+      return null;
+    }
+  }
+
+  /// 获取默认文件名
+  ///
+  /// 优先使用原始打开文件的文件名，其次使用会话标题，最后回退到 session ID。
+  String _getDefaultFileName(String sessionId) {
+    // 优先使用原始文件名
+    final sourcePath = state.sourceFilePath;
+    if (sourcePath != null &&
+        p.basename(sourcePath).endsWith(AppConstants.recpFileExtension)) {
+      return p.basename(sourcePath);
+    }
+
+    // 尝试使用会话标题
+    final sessionList = _ref.read(sessionListProvider).valueOrNull;
+    final session = sessionList?.where((s) => s.sessionId == sessionId).firstOrNull;
+    final title = session?.title;
+    if (title != null && title.isNotEmpty) {
+      final sanitized =
+          title.replaceAll(RegExp(r'[^\w\s\u4e00-\u9fff-]'), '_').trim();
+      return '$sanitized${AppConstants.recpFileExtension}';
+    }
+
+    // 回退到 session ID
+    return '$sessionId${AppConstants.recpFileExtension}';
   }
 
   /// 清除错误状态

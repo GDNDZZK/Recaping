@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/database/session_database.dart';
@@ -265,19 +266,24 @@ class PlaybackControlNotifier extends StateNotifier<AsyncValue<void>> {
   /// 从数据库加载音频分片并合并，同时加载时间轴事件。
   Future<void> loadSession(String sessionId) async {
     try {
+      debugPrint('[PlaybackControlNotifier] loadSession($sessionId): 开始加载');
       state = const AsyncValue.loading();
 
       final service = _ref.read(playbackServiceProvider);
       final storageService = await _ref.read(storageServiceProvider.future);
       final sessionDb = await storageService.openSession(sessionId);
+      debugPrint('[PlaybackControlNotifier] loadSession($sessionId): SessionDatabase 已获取');
 
       await service.loadSession(sessionId, sessionDb);
+      debugPrint('[PlaybackControlNotifier] loadSession($sessionId): 音频加载成功');
 
       // 加载时间轴事件
       await _ref.read(playbackEventsProvider.notifier).loadEvents(sessionId);
+      debugPrint('[PlaybackControlNotifier] loadSession($sessionId): 时间轴事件加载成功');
 
       state = const AsyncValue.data(null);
     } catch (e, st) {
+      debugPrint('[PlaybackControlNotifier] loadSession($sessionId): 加载失败 - $e');
       state = AsyncValue.error(e, st);
     }
   }

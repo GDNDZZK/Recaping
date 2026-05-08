@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
@@ -86,9 +87,12 @@ class DatabaseHelper {
   Future<Database> openSessionDatabase(String sessionId) async {
     // 如果已缓存，直接返回
     if (_databases.containsKey(sessionId)) {
-      return _databases[sessionId]!;
+      final cachedDb = _databases[sessionId]!;
+      debugPrint('[DatabaseHelper] openSessionDatabase($sessionId): 从缓存返回, isOpen=${cachedDb.isOpen}');
+      return cachedDb;
     }
 
+    debugPrint('[DatabaseHelper] openSessionDatabase($sessionId): 打开新数据库');
     // 确保会话目录存在
     await ensureSessionDirs(sessionId);
 
@@ -104,14 +108,23 @@ class DatabaseHelper {
     );
 
     _databases[sessionId] = database;
+    debugPrint('[DatabaseHelper] openSessionDatabase($sessionId): 数据库已打开并缓存');
     return database;
   }
 
   /// 关闭指定会话的数据库连接
   Future<void> closeSessionDatabase(String sessionId) async {
+    debugPrint('[DatabaseHelper] closeSessionDatabase($sessionId): 开始关闭数据库');
     final database = _databases.remove(sessionId);
-    if (database != null && database.isOpen) {
-      await database.close();
+    if (database != null) {
+      if (database.isOpen) {
+        await database.close();
+        debugPrint('[DatabaseHelper] closeSessionDatabase($sessionId): 数据库已关闭');
+      } else {
+        debugPrint('[DatabaseHelper] closeSessionDatabase($sessionId): 数据库已经关闭');
+      }
+    } else {
+      debugPrint('[DatabaseHelper] closeSessionDatabase($sessionId): 数据库不在缓存中');
     }
   }
 

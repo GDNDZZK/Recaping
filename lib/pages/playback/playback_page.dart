@@ -1,3 +1,4 @@
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -542,13 +543,20 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
             )
           : const Text('回放'),
       actions: [
-        // 外部会话模式：保存按钮
+        // 外部会话模式：保存为文件按钮
         if (widget.isExternal)
           IconButton(
             icon: Icon(
               Icons.save,
               color: isDirty ? accentColor : null,
             ),
+            tooltip: '保存为文件',
+            onPressed: _handleSaveBackToFile,
+          ),
+        // 外部会话模式：保存到会话列表按钮
+        if (widget.isExternal)
+          IconButton(
+            icon: const Icon(Icons.playlist_add),
             tooltip: '保存到会话列表',
             onPressed: _handleSaveExternalSession,
           ),
@@ -580,16 +588,18 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
                   ],
                 ),
               ),
-            const PopupMenuItem(
-              value: 'export',
-              child: Row(
-                children: [
-                  Icon(Icons.file_upload, size: 20),
-                  SizedBox(width: 12),
-                  Text('导出'),
-                ],
+            // 外部会话不显示导出选项（已有保存为文件按钮）
+            if (!widget.isExternal)
+              const PopupMenuItem(
+                value: 'export',
+                child: Row(
+                  children: [
+                    Icon(Icons.file_upload, size: 20),
+                    SizedBox(width: 12),
+                    Text('导出'),
+                  ],
+                ),
               ),
-            ),
             const PopupMenuItem(
               value: 'share',
               child: Row(
@@ -668,13 +678,143 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
     }
   }
 
+  /// 保存外部会话为文件
+  ///
+  /// 直接弹出 FilePicker 另存为对话框，让用户选择保存位置。
+  Future<void> _handleSaveBackToFile() async {
+    await _handleSaveAsFile();
+  }
+
+  /// 显示文件名编辑对话框
+  ///
+  /// 让用户在保存前编辑文件名。
+  /// [initialName] 初始文件名
+  /// 返回用户编辑后的文件名，如果用户取消则返回 null
+  Future<String?> _showFileNameDialog(String initialName) async {
+    final controller = TextEditingController(text: initialName);
+    final nameWithoutExt = initialName.replaceAll(RegExp(r'\.recp$'), '');
+    controller.selection = TextSelection(baseOffset: 0, extentOffset: nameWithoutExt.length);
+
+    return showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('保存文件'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(
+            labelText: '文件名',
+            hintText: '输入文件名',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, controller.text),
+            child: const Text('保存'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 另存为文件（降级方案）
+  ///
+  /// 使用 FilePicker 让用户选择保存位置，并允许编辑文件名。
+  Future<void> _handleSaveAsFile() async {
+    // 1. 先获取默认文件名
+    final sessionId = widget.sessionId;
+    final externalState = ref.read(externalSessionProvider);
+    String defaultFileName;
+
+    // 优先使用原始文件名
+    final sourcePath = externalState.sourceFilePath;
+    if (sourcePath != null && sourcePath.endsWith('.recp')) {
+      defaultFileName = sourcePath.split('/').last;
+    } else {
+      // 尝试使用会话标题
+      final sessionList = ref.read(sessionListProvider);
+      final session = sessionList.valueOrNull
+          ?.where((s) => s.sessionId == sessionId)
+          .firstOrNull;
+      final title = session?.title;
+      if (title != null && title.isNotEmpty) {
+        final sanitized =
+            title.replaceAll(RegExp(r'[^\w\s\u4e00-\u9fff-]'), '_').trim();
+        defaultFileName = '$sanitized.recp';
+      } else {
+        // 回退到 session ID
+        defaultFileName = '$sessionId.recp';
+      }
+    }
+
+    // 2. 让用户选择保存目录
+    final selectedDirectory = await FilePicker.getDirectoryPath(
+      dialogTitle: '选择保存目录',
+    );
+
+    if (selectedDirectory == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('已取消保存')),
+        );
+      }
+      return;
+    }
+
+    // 3. 弹出文件名编辑对话框
+    final editedFileName = await _showFileNameDialog(defaultFileName);
+    if (editedFileName == null || editedFileName.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('已取消保存')),
+        );
+      }
+      return;
+    }
+
+    // 4. 确保文件名以 .recp 结尾
+    String finalFileName = editedFileName;
+    if (!finalFileName.endsWith('.recp')) {
+      finalFileName = '$finalFileName.recp';
+    }
+
+    // 5. 调用 saveAsFileToDirectory 保存文件
+    final savePath = await ref
+        .read(externalSessionProvider.notifier)
+        .saveAsFileToDirectory(selectedDirectory, finalFileName);
+
+    if (savePath != null && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('已保存到: $savePath')),
+      );
+      // 清理外部会话缓存并导航到首页
+      await _cleanupExternalSession();
+      if (!mounted) return;
+      if (context.canPop()) {
+        context.pop();
+      } else {
+        context.go('/');
+      }
+    } else if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('保存失败')),
+      );
+    }
+  }
+
   /// 显示保存确认对话框
+  ///
+  /// 提供三个选项：保存为文件、保存到会话列表、放弃修改。
   void _showSaveConfirmDialog() {
     showDialog(
       context: context,
       builder: (dialogContext) => AlertDialog(
         title: const Text('未保存的修改'),
-        content: const Text('您有未保存的修改，是否保存到会话列表？'),
+        content: const Text('您有未保存的修改，请选择保存方式：'),
         actions: [
           TextButton(
             onPressed: () {
@@ -689,12 +829,19 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
             },
             child: const Text('放弃修改'),
           ),
-          FilledButton(
+          TextButton(
             onPressed: () {
               Navigator.pop(dialogContext);
               _handleSaveExternalSession();
             },
-            child: const Text('保存'),
+            child: const Text('保存到会话列表'),
+          ),
+          FilledButton(
+            onPressed: () {
+              Navigator.pop(dialogContext);
+              _handleSaveBackToFile();
+            },
+            child: const Text('保存为文件'),
           ),
         ],
       ),

@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:uuid/uuid.dart';
 
@@ -181,11 +182,14 @@ class StorageService {
   /// 使用缓存机制，避免重复打开同一会话的数据库。
   Future<SessionDatabase> openSession(String sessionId) async {
     if (_openDatabases.containsKey(sessionId)) {
+      debugPrint('[StorageService] openSession($sessionId): 从缓存返回 SessionDatabase');
       return _openDatabases[sessionId]!;
     }
 
+    debugPrint('[StorageService] openSession($sessionId): 创建新的 SessionDatabase');
     final sessionDb = await SessionDatabase.create(sessionId);
     _openDatabases[sessionId] = sessionDb;
+    debugPrint('[StorageService] openSession($sessionId): SessionDatabase 已创建并缓存');
     return sessionDb;
   }
 
@@ -364,11 +368,15 @@ class StorageService {
 
   /// 关闭并移除缓存的 SessionDatabase
   Future<void> _closeSessionDatabase(String sessionId) async {
+    debugPrint('[StorageService] _closeSessionDatabase($sessionId): 开始关闭');
     final sessionDb = _openDatabases.remove(sessionId);
     // SessionDatabase 本身不持有需要关闭的资源，
     // 底层 Database 由 DatabaseHelper 管理
     if (sessionDb != null) {
+      debugPrint('[StorageService] _closeSessionDatabase($sessionId): 从缓存移除 SessionDatabase，关闭底层 Database');
       await _dbHelper.closeSessionDatabase(sessionId);
+    } else {
+      debugPrint('[StorageService] _closeSessionDatabase($sessionId): SessionDatabase 不在缓存中');
     }
   }
 

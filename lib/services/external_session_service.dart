@@ -213,6 +213,28 @@ class ExternalSessionService {
     await _exportService.shareSession(sessionId, title: title);
   }
 
+  /// 将外部会话保存回原始文件路径
+  ///
+  /// 使用 ExportService 重新打包会话为 .recp 文件，
+  /// 然后将打包数据写入 [targetPath]。
+  /// 成功返回 true，失败返回 false。
+  Future<bool> saveBackToFile(String sessionId, String targetPath) async {
+    try {
+      // 使用 ExportService 打包会话
+      final exportPath = await _exportService.exportSession(sessionId);
+      final exportFile = File(exportPath);
+      final bytes = await exportFile.readAsBytes();
+
+      // 写入目标路径
+      await File(targetPath).writeAsBytes(bytes, flush: true);
+      debugPrint('[ExternalSessionService] saveBackToFile 成功: $targetPath');
+      return true;
+    } catch (e) {
+      debugPrint('[ExternalSessionService] saveBackToFile 失败: $e');
+      return false;
+    }
+  }
+
   /// 清理外部会话
   ///
   /// 删除指定外部会话的所有文件和数据库记录。
@@ -220,6 +242,7 @@ class ExternalSessionService {
   ///
   /// [sessionId] 要清理的外部会话 ID
   Future<void> cleanupExternalSession(String sessionId) async {
+    debugPrint('[ExternalSessionService] cleanupExternalSession($sessionId): 开始清理');
     // 关闭数据库连接
     await _dbHelper.closeSessionDatabase(sessionId);
 
@@ -228,6 +251,7 @@ class ExternalSessionService {
     final dir = Directory(sessionDir);
     if (await dir.exists()) {
       await dir.delete(recursive: true);
+      debugPrint('[ExternalSessionService] cleanupExternalSession($sessionId): 会话目录已删除');
     }
 
     // 确保从 session_summaries 中也删除（防止残留）
@@ -237,6 +261,7 @@ class ExternalSessionService {
       where: 'session_id = ?',
       whereArgs: [sessionId],
     );
+    debugPrint('[ExternalSessionService] cleanupExternalSession($sessionId): 清理完成');
   }
 
   /// 查找孤立的外部会话

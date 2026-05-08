@@ -253,14 +253,15 @@ class _PlaybackPageState extends ConsumerState<PlaybackPage> {
 
     // 外部会话模式：拦截返回操作，检查是否有未保存修改
     if (widget.isExternal) {
-      return PopScope(
-        canPop: !(externalState?.isDirty ?? false),
-        onPopInvokedWithResult: (didPop, result) {
-          if (!didPop) {
+      return WillPopScope(
+        onWillPop: () async {
+          if (externalState?.isDirty ?? false) {
             _showSaveConfirmDialog();
+            return false; // 不退出，等待用户选择
           } else {
             // 正常退出（无修改），清理外部会话
-            _cleanupExternalSession();
+            await _cleanupExternalSession();
+            return true;
           }
         },
         child: scaffold,
